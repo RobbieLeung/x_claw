@@ -261,11 +261,11 @@ Meaning:
 
 Role prompts are stored in:
 
-- `agents/product_owner.md`
-- `agents/project_manager.md`
-- `agents/developer.md`
-- `agents/tester.md`
-- `agents/qa.md`
+- `src/x_claw/agents/product_owner.md`
+- `src/x_claw/agents/project_manager.md`
+- `src/x_claw/agents/developer.md`
+- `src/x_claw/agents/tester.md`
+- `src/x_claw/agents/qa.md`
 
 At runtime, `x_claw` combines:
 

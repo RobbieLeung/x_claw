@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from importlib import resources
 from pathlib import Path
 import re
 import shutil
@@ -148,6 +150,10 @@ class SubprocessRunner:
         )
 
 
+def _cwd_default_dir(dirname: str) -> Path:
+    return Path.cwd().resolve() / dirname
+
+
 @dataclass
 class AgentInvocation:
     """Input payload for one role invocation."""
@@ -235,6 +241,7 @@ class AgentAdapter:
         skills_dir: str | Path | None = None,
     ) -> None:
         self.task_workspace_path = Path(task_workspace_path).expanduser().resolve()
+        self._resource_stack = ExitStack()
         self.runner = runner or SubprocessRunner()
         self.codex_executable = _normalize_non_empty(codex_executable, "codex_executable")
         if not codex_arguments:
@@ -245,9 +252,20 @@ class AgentAdapter:
             "send_prompt_via_stdin",
         )
         self.agents_dir = self._resolve_agents_dir(agents_dir)
-        self.skills_dir = self._resolve_optional_dir(skills_dir, default_dirname="skills")
+        self.skills_dir = self._resolve_skills_dir(skills_dir)
         self.artifact_store = ArtifactStore(self.task_workspace_path)
         self.task_store = TaskStore(self.task_workspace_path)
+
+    def close(self) -> None:
+        """Release any temporary package resource handles."""
+
+        self._resource_stack.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def supported_roles(self) -> tuple[str, ...]:
         """Return supported role names for this adapter."""
@@ -436,6 +454,12 @@ class AgentAdapter:
             raise AgentAdapterError(f"agents directory does not exist: {candidate}")
         return candidate
 
+    def _resolve_skills_dir(self, skills_dir: str | Path | None) -> Path:
+        candidate = self._resolve_optional_dir(skills_dir, default_dirname="skills")
+        if not candidate.is_dir():
+            raise AgentAdapterError(f"skills directory does not exist: {candidate}")
+        return candidate
+
     def _resolve_optional_dir(
         self,
         value: str | Path | None,
@@ -443,7 +467,14 @@ class AgentAdapter:
         default_dirname: str,
     ) -> Path:
         if value is None:
-            return Path.cwd().resolve() / default_dirname
+            bundled_candidate = self._resolve_bundled_dir(default_dirname)
+            if bundled_candidate is not None:
+                return bundled_candidate
+
+            local_candidate = _cwd_default_dir(default_dirname)
+            if local_candidate.is_dir():
+                return local_candidate
+            return local_candidate
 
         candidate = Path(value).expanduser()
         if not candidate.is_absolute():
@@ -451,6 +482,13 @@ class AgentAdapter:
         else:
             candidate = candidate.resolve()
         return candidate
+
+    def _resolve_bundled_dir(self, dirname: str) -> Path | None:
+        bundled_root = resources.files("x_claw")
+        resource = bundled_root.joinpath(dirname)
+        if not resource.is_dir():
+            return None
+        return self._resource_stack.enter_context(resources.as_file(resource)).resolve()
 
     def _build_command(
         self,
