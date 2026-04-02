@@ -122,4 +122,6 @@ def _resolve_launch_dir_child(command_launch_dir: str | None, dirname: str) -> s
     if command_launch_dir is None:
         return None
     candidate = Path(command_launch_dir).expanduser().resolve() / dirname
+    if not candidate.is_dir():
+        return None
     return str(candidate)
