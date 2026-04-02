@@ -26,7 +26,9 @@ from .protocol import (
 from .task_store import TaskStore
 from .human_io import (
     has_pending_human_advice,
+    publish_progress_update,
     publish_review_request,
+    read_progress_snapshot,
     resolve_pending_human_advice,
 )
 
@@ -216,6 +218,13 @@ class StageExecutor:
                 decision=decision,
             ),
         )
+        progress_path = self._sync_product_owner_progress(
+            stage=stage,
+            decision=decision,
+            response_text=response_text,
+        )
+        if progress_path is not None:
+            published_paths = (*published_paths, progress_path)
         self._record_route_decision(
             stage=stage,
             context=context,
@@ -833,6 +842,83 @@ class StageExecutor:
             message="pipeline completed",
         )
 
+    def _sync_product_owner_progress(
+        self,
+        *,
+        stage: Stage,
+        decision: RouteDecision,
+        response_text: str,
+    ) -> str | None:
+        snapshot = read_progress_snapshot(artifact_store=self.artifact_store)
+        latest_update = _extract_optional_bullet_field(response_text, "latest_update")
+        current_focus = _extract_optional_bullet_field(response_text, "current_focus")
+        next_step = _extract_optional_bullet_field(response_text, "next_step")
+        risks = _extract_optional_bullet_field(response_text, "risks")
+        user_summary = _extract_optional_bullet_field(response_text, "user_summary")
+        needs_review_raw = _extract_optional_bullet_field(response_text, "needs_human_review")
+
+        resolved_latest_update = latest_update or f"Product Owner updated the task plan during {stage.value}."
+        resolved_current_focus = current_focus or self._normalize_progress_value(snapshot.current_focus)
+        resolved_next_step = next_step or self._product_owner_next_step(decision=decision)
+        resolved_risks = risks or self._normalize_progress_value(snapshot.risks) or "-"
+        resolved_needs_review = _parse_optional_yes_no(
+            needs_review_raw,
+            default=decision.next_stage == Stage.HUMAN_GATE,
+            field_name="needs_human_review",
+        )
+        resolved_user_summary = user_summary or self._compose_progress_user_summary(
+            stage=stage,
+            current_focus=resolved_current_focus,
+            next_step=resolved_next_step,
+            risks=resolved_risks,
+            needs_human_review=resolved_needs_review,
+            latest_update=resolved_latest_update,
+        )
+        return publish_progress_update(
+            task_store=self.task_store,
+            artifact_store=self.artifact_store,
+            latest_update=resolved_latest_update,
+            timeline_title="Product Owner Progress Updated",
+            timeline_body=resolved_user_summary,
+            current_focus=resolved_current_focus,
+            next_step=resolved_next_step,
+            risks=resolved_risks,
+            needs_human_review=resolved_needs_review,
+            user_summary=resolved_user_summary,
+        )
+
+    def _product_owner_next_step(self, *, decision: RouteDecision) -> str:
+        if decision.task_status == TaskStatus.TERMINATED or decision.next_stage is None:
+            return "No further automatic steps."
+        if decision.next_stage == Stage.HUMAN_GATE:
+            return "Await formal human review for the latest proposal."
+        return f"Route the task to {decision.next_stage.value}."
+
+    def _compose_progress_user_summary(
+        self,
+        *,
+        stage: Stage,
+        current_focus: str | None,
+        next_step: str | None,
+        risks: str,
+        needs_human_review: bool,
+        latest_update: str,
+    ) -> str:
+        focus = current_focus or "The Product Owner is organizing the current task."
+        next_action = next_step or "The orchestrator will continue with the next stage automatically."
+        risk_text = risks if risks and risks != "-" else "No major risks are highlighted right now."
+        review_text = "Human review is required." if needs_human_review else "Human review is not required right now."
+        return (
+            f"Current stage: {stage.value}. {latest_update} Focus: {focus} "
+            f"Next: {next_action} Risks: {risk_text} {review_text}"
+        )
+
+    def _normalize_progress_value(self, value: str) -> str | None:
+        normalized = value.strip()
+        if not normalized or normalized == "-":
+            return None
+        return normalized
+
     def _fail_stage_contract(
         self,
         *,
@@ -1021,19 +1107,23 @@ def _stage_objective(
 ) -> str:
     if stage == Stage.PRODUCT_OWNER_REFINEMENT:
         objective = (
-            "Refine the requirement baseline and emit both the latest requirement specification "
-            "and a route_decision. Your response must include bullet fields "
-            "`- next_stage`, `- task_status`, `- based_on_artifacts`, and "
-            "`- human_advice_disposition`. At this stage, running next_stage must be either "
+            "Refine the requirement baseline, refresh the user-facing progress summary, and emit both "
+            "the latest requirement specification and a route_decision. Your response must include "
+            "bullet fields `- next_stage`, `- task_status`, `- based_on_artifacts`, and "
+            "`- human_advice_disposition`. It must also include progress bullets `- latest_update`, "
+            "`- current_focus`, `- next_step`, `- risks`, `- needs_human_review`, and "
+            "`- user_summary`. At this stage, running next_stage must be either "
             "`project_manager_research` or `product_owner_dispatch`, and task_status must be "
             "`running` or `terminated`."
         )
     elif stage == Stage.PRODUCT_OWNER_DISPATCH:
         objective = (
-            "Refresh the current execution plan, emit any necessary handoff artifacts, and emit a "
-            "route_decision. Your response must include bullet fields "
-            "`- next_stage`, `- task_status`, `- based_on_artifacts`, and "
-            "`- human_advice_disposition`. At this stage, running next_stage must be one of "
+            "Refresh the current execution plan, emit any necessary handoff artifacts, refresh the "
+            "user-facing progress summary, and emit a route_decision. Your response must include "
+            "bullet fields `- next_stage`, `- task_status`, `- based_on_artifacts`, and "
+            "`- human_advice_disposition`. It must also include progress bullets `- latest_update`, "
+            "`- current_focus`, `- next_step`, `- risks`, `- needs_human_review`, and "
+            "`- user_summary`. At this stage, running next_stage must be one of "
             "`project_manager_research`, `developer`, `tester`, `qa`, `human_gate`, or `closeout`, "
             "and task_status must be `running` or `terminated`."
         )
@@ -1168,6 +1258,17 @@ def _extract_optional_bullet_field(response_text: str, field_name: str) -> str |
     if matches:
         return matches[0]
     return None
+
+
+def _parse_optional_yes_no(raw_value: str | None, *, default: bool, field_name: str) -> bool:
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized == "yes":
+        return True
+    if normalized == "no":
+        return False
+    raise ValueError(f"{field_name} must be `yes` or `no` when provided.")
 
 
 def _find_bullet_field_matches(response_text: str, field_name: str) -> list[str]:

@@ -45,6 +45,7 @@ _STATUS_FIELD_ORDER: tuple[str, ...] = (
     "current_stage",
     "current_owner",
     "active_step_id",
+    "user_summary",
     "latest_update",
     "current_focus",
     "next_step",
@@ -173,6 +174,7 @@ def _idle_status_view() -> dict[str, str]:
         "current_stage": "-",
         "current_owner": "-",
         "active_step_id": "-",
+        "user_summary": "-",
         "latest_update": "-",
         "current_focus": "-",
         "next_step": "-",
@@ -199,6 +201,7 @@ def _build_status_view(*, active, task_store: TaskStore, artifact_store: Artifac
         "current_stage": context.current_stage.value,
         "current_owner": context.current_owner,
         "active_step_id": _read_active_step_id(context),
+        "user_summary": _build_user_summary(progress=progress, context=context),
         "latest_update": progress.latest_update,
         "current_focus": progress.current_focus,
         "next_step": progress.next_step,
@@ -208,6 +211,17 @@ def _build_status_view(*, active, task_store: TaskStore, artifact_store: Artifac
         "latest_review_request_id": read_latest_review_request_id(artifact_store=artifact_store),
         "progress_path": progress_path,
     }
+
+
+def _build_user_summary(*, progress, context) -> str:
+    if progress.user_summary != "-":
+        return progress.user_summary
+    risk_text = progress.risks if progress.risks != "-" else "No major risks are recorded."
+    review_text = "Human review is required." if progress.needs_human_review else "Human review is not required right now."
+    return (
+        f"Current stage: {context.current_stage.value}. Latest update: {progress.latest_update} "
+        f"Focus: {progress.current_focus} Next: {progress.next_step} Risks: {risk_text} {review_text}"
+    )
 
 
 def _run_status_action(

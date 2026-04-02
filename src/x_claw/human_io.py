@@ -72,6 +72,7 @@ class ProgressSnapshot:
     next_step: str
     risks: str
     needs_human_review: bool
+    user_summary: str
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,7 @@ def ensure_supervision_artifacts(*, task_store: TaskStore, artifact_store: Artif
                 next_step=_default_next_step(context),
                 risks="-",
                 needs_human_review=False,
+                user_summary="-",
                 timeline_entries=(
                     _timeline_entry("system", "Gateway Initialized", "Task workspace initialized."),
                 ),
@@ -145,6 +147,7 @@ def read_progress_snapshot(*, artifact_store: ArtifactStore) -> ProgressSnapshot
             next_step="-",
             risks="-",
             needs_human_review=False,
+            user_summary="-",
         )
     body = path.read_text(encoding="utf-8")
     return ProgressSnapshot(
@@ -153,6 +156,7 @@ def read_progress_snapshot(*, artifact_store: ArtifactStore) -> ProgressSnapshot
         next_step=_extract_summary_value(body, "next_step", default="-"),
         risks=_extract_summary_value(body, "risks", default="-"),
         needs_human_review=_extract_summary_value(body, "needs_human_review", default="no") == "yes",
+        user_summary=_extract_summary_value(body, "user_summary", default="-"),
     )
 
 
@@ -167,7 +171,8 @@ def publish_progress_update(
     next_step: str | None = None,
     risks: str | None = None,
     needs_human_review: bool | None = None,
-) -> None:
+    user_summary: str | None = None,
+) -> str:
     ensure_supervision_artifacts(task_store=task_store, artifact_store=artifact_store)
     context = task_store.load_task_context()
     previous_path = artifact_store.current_artifact_path(constants.ARTIFACT_PROGRESS)
@@ -179,12 +184,15 @@ def publish_progress_update(
     resolved_risks = risks if risks is not None else snapshot.risks
     if not resolved_risks:
         resolved_risks = "-"
+    resolved_user_summary = user_summary if user_summary is not None else snapshot.user_summary
+    if not resolved_user_summary:
+        resolved_user_summary = "-"
     resolved_needs_review = (
         needs_human_review
         if needs_human_review is not None
         else context.status == TaskStatus.WAITING_APPROVAL
     )
-    _publish_and_track_artifact(
+    return _publish_and_track_artifact(
         task_store=task_store,
         artifact_store=artifact_store,
         artifact_type=constants.ARTIFACT_PROGRESS,
@@ -194,6 +202,7 @@ def publish_progress_update(
             next_step=resolved_next_step,
             risks=resolved_risks,
             needs_human_review=resolved_needs_review,
+            user_summary=resolved_user_summary,
             timeline_entries=(*previous_timeline, _timeline_entry("system", timeline_title, timeline_body)),
         ),
         stage=context.current_stage,
@@ -470,6 +479,7 @@ def _progress_body(
     next_step: str,
     risks: str,
     needs_human_review: bool,
+    user_summary: str,
     timeline_entries: tuple[str, ...],
 ) -> str:
     return "\n".join(
@@ -483,6 +493,7 @@ def _progress_body(
             f"- next_step: {next_step.strip()}",
             f"- risks: {risks.strip() or '-'}",
             f"- needs_human_review: {'yes' if needs_human_review else 'no'}",
+            f"- user_summary: {user_summary.strip() or '-'}",
             "",
             "## Timeline",
             "",

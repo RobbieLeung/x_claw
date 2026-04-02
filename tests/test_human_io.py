@@ -8,6 +8,7 @@ from x_claw.artifact_store import ArtifactStore
 from x_claw.human_io import (
     ensure_supervision_artifacts,
     pending_human_advice_count,
+    publish_progress_update,
     publish_review_request,
     read_human_advice_entries,
     read_latest_review_request_id,
@@ -181,6 +182,48 @@ class HumanIoTest(unittest.TestCase):
                         artifact_store=artifacts,
                         text="please adjust scope",
                     )
+
+
+    def test_publish_progress_update_preserves_user_summary_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="progress summary preservation",
+                task_id="task-progress-summary-preservation",
+                workspace_root=root / "workspace",
+            )
+            store = TaskStore(result.task_workspace_path)
+            artifacts = ArtifactStore(result.task_workspace_path)
+            ensure_supervision_artifacts(task_store=store, artifact_store=artifacts)
+
+            publish_progress_update(
+                task_store=store,
+                artifact_store=artifacts,
+                latest_update="PO updated the summary.",
+                timeline_title="PO Summary",
+                timeline_body="first summary",
+                current_focus="Focus on the scoped change.",
+                next_step="Developer implements the next step.",
+                risks="Schema compatibility.",
+                user_summary="PO summary for users.",
+            )
+            publish_progress_update(
+                task_store=store,
+                artifact_store=artifacts,
+                latest_update="Gateway is still running.",
+                timeline_title="Gateway Update",
+                timeline_body="orchestrator update",
+                current_focus="Focus on the scoped change.",
+                next_step="Developer continues coding.",
+                risks="Schema compatibility.",
+            )
+
+            progress = read_progress_snapshot(artifact_store=artifacts)
+            self.assertEqual(progress.latest_update, "Gateway is still running.")
+            self.assertEqual(progress.user_summary, "PO summary for users.")
 
 
 if __name__ == "__main__":

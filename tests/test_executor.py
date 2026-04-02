@@ -11,6 +11,7 @@ from x_claw.human_io import (
     ensure_supervision_artifacts,
     publish_progress_update,
     read_latest_review_request_id,
+    read_progress_snapshot,
 )
 from x_claw.protocol import HumanAdviceDisposition, Stage, TaskStatus
 from x_claw.task_store import TaskStore
@@ -201,6 +202,53 @@ class ExecutorContractTest(unittest.TestCase):
                     constants.ARTIFACT_EXECUTION_PLAN,
                     constants.ARTIFACT_DEV_HANDOFF,
                 ),
+            )
+
+
+    def test_sync_product_owner_progress_uses_po_summary_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="executor progress sync",
+                task_id="task-executor-progress-sync",
+                workspace_root=root / "workspace",
+            )
+            executor = StageExecutor(result.task_workspace_path)
+            store = TaskStore(result.task_workspace_path)
+            artifacts = ArtifactStore(result.task_workspace_path)
+            ensure_supervision_artifacts(task_store=store, artifact_store=artifacts)
+
+            progress_path = executor._sync_product_owner_progress(
+                stage=Stage.PRODUCT_OWNER_DISPATCH,
+                decision=RouteDecision(
+                    next_stage=Stage.DEVELOPER,
+                    task_status=TaskStatus.RUNNING,
+                    based_on_artifacts=(),
+                    human_advice_disposition=HumanAdviceDisposition.NONE,
+                ),
+                response_text=(
+                    "- latest_update: PO refreshed the plan\n"
+                    "- current_focus: Implement the current step only.\n"
+                    "- next_step: Developer starts coding.\n"
+                    "- risks: Keep current progress consumers compatible.\n"
+                    "- needs_human_review: no\n"
+                    "- user_summary: The PO narrowed the work to the current step and highlighted compatibility as the main risk.\n"
+                ),
+            )
+
+            self.assertEqual(progress_path, "current/progress.md")
+            progress = read_progress_snapshot(artifact_store=artifacts)
+            self.assertEqual(progress.latest_update, "PO refreshed the plan")
+            self.assertEqual(progress.current_focus, "Implement the current step only.")
+            self.assertEqual(progress.next_step, "Developer starts coding.")
+            self.assertEqual(progress.risks, "Keep current progress consumers compatible.")
+            self.assertFalse(progress.needs_human_review)
+            self.assertEqual(
+                progress.user_summary,
+                "The PO narrowed the work to the current step and highlighted compatibility as the main risk.",
             )
 
 

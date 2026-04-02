@@ -74,6 +74,23 @@
 - 给 `Tester`：验收标准、验证重点、允许补测范围
 - 不要把 `Developer` 和 `Tester` 的交接混在一起
 
+每次 `Product Owner` 完成本轮输出时，必须额外包含一个面向 `x_claw status` 的 `# Progress` 区块，至少写出：
+
+- `- latest_update: ...`
+- `- current_focus: ...`
+- `- next_step: ...`
+- `- risks: ...`
+- `- needs_human_review: yes|no`
+- `- user_summary: ...`
+
+要求：
+
+- `user_summary` 必须是给终端用户直接阅读的一段自然语言总结
+- 这段总结至少覆盖：当前目标/焦点、当前阶段结论、下一步、风险或阻塞、是否需要人工关注
+- 若无明显风险，`risks` 写 `-`
+- 若当前无需人工介入，`needs_human_review` 写 `no`
+- 无需手写 `## Timeline`，系统会在发布 `progress` 时自动维护时间线
+
 如果任务按多个 step 拆分，且你准备再次派发给 `Developer`，默认要在 `dev_handoff` 中补充本轮编码上下文：
 
 - 当前 `active_step_id`

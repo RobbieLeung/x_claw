@@ -11,7 +11,7 @@ from unittest import mock
 from x_claw import cli
 from x_claw.artifact_store import ArtifactStore
 from x_claw.cli import main
-from x_claw.human_io import ensure_supervision_artifacts, publish_review_request
+from x_claw.human_io import ensure_supervision_artifacts, publish_progress_update, publish_review_request
 from x_claw.protocol import Stage, TaskStatus
 from x_claw.task_store import TaskStore
 from x_claw.workspace import initialize_task_workspace
@@ -267,6 +267,92 @@ class CliTest(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertEqual(stdout, "")
             self.assertIn("waiting for approval", stderr)
+
+
+    def test_status_prefers_product_owner_user_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            workspace_root = root / "workspace"
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="status user summary",
+                task_id="task-status-user-summary",
+                workspace_root=workspace_root,
+            )
+            store = TaskStore(result.task_workspace_path)
+            store.update_runtime_state(
+                gateway_pid=os.getpid(),
+                stage=Stage.PRODUCT_OWNER_DISPATCH,
+                current_owner="product_owner",
+                status=TaskStatus.RUNNING,
+            )
+            artifacts = ArtifactStore(result.task_workspace_path)
+            ensure_supervision_artifacts(task_store=store, artifact_store=artifacts)
+            publish_progress_update(
+                task_store=store,
+                artifact_store=artifacts,
+                latest_update="PO refreshed the dispatch plan.",
+                timeline_title="PO Summary",
+                timeline_body="summary",
+                current_focus="Implement the active step only.",
+                next_step="Developer takes the next coding round.",
+                risks="Keep the schema backward compatible.",
+                user_summary="PO says the task now focuses on the active step, with backward compatibility as the main risk.",
+            )
+
+            exit_code, stdout, stderr = _invoke_main([
+                "status",
+                "--workspace-root", str(workspace_root),
+            ])
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr, "")
+            self.assertIn(
+                "user_summary: PO says the task now focuses on the active step, with backward compatibility as the main risk.",
+                stdout,
+            )
+
+    def test_status_falls_back_to_generated_summary_without_po_user_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            workspace_root = root / "workspace"
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="status fallback summary",
+                task_id="task-status-fallback-summary",
+                workspace_root=workspace_root,
+            )
+            store = TaskStore(result.task_workspace_path)
+            store.update_runtime_state(
+                gateway_pid=os.getpid(),
+                stage=Stage.DEVELOPER,
+                current_owner="developer",
+                status=TaskStatus.RUNNING,
+            )
+            artifacts = ArtifactStore(result.task_workspace_path)
+            ensure_supervision_artifacts(task_store=store, artifact_store=artifacts)
+            publish_progress_update(
+                task_store=store,
+                artifact_store=artifacts,
+                latest_update="Developer is implementing the dispatched step.",
+                timeline_title="Developer Running",
+                timeline_body="implementation in progress",
+                current_focus="Implement the scoped repository changes.",
+                next_step="Tester validates the step after coding finishes.",
+                risks="-",
+            )
+
+            exit_code, stdout, stderr = _invoke_main([
+                "status",
+                "--workspace-root", str(workspace_root),
+            ])
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr, "")
+            self.assertIn("user_summary: Current stage: developer.", stdout)
+            self.assertIn("Human review is not required right now.", stdout)
 
 
 if __name__ == "__main__":
