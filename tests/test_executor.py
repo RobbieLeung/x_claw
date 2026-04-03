@@ -4,21 +4,174 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from x_claw import protocol as constants
-from x_claw.artifact_store import ArtifactStore
-from x_claw.executor import RouteDecision, StageExecutor, _parse_route_decision
-from x_claw.human_io import (
+from xclaw import protocol as constants
+from xclaw.agent_adapter import AgentInvocation, AgentInvocationResult
+from xclaw.artifact_store import ArtifactStore
+from xclaw.executor import RouteDecision, StageExecutor, _parse_route_decision
+from xclaw.models import AgentResult
+from xclaw.human_io import (
     ensure_supervision_artifacts,
     publish_progress_update,
     read_latest_review_request_id,
     read_progress_snapshot,
 )
-from x_claw.protocol import HumanAdviceDisposition, Stage, TaskStatus
-from x_claw.task_store import TaskStore
-from x_claw.workspace import initialize_task_workspace
+from xclaw.protocol import (
+    AgentExecutionStatus,
+    AgentResultType,
+    HumanAdviceDisposition,
+    Stage,
+    TaskStatus,
+)
+from xclaw.task_store import TaskStore
+from xclaw.workspace import initialize_task_workspace
+
+
+def _fake_invocation_result(*, role: str, stage: Stage) -> AgentInvocationResult:
+    invocation = AgentInvocation(
+        role=role,
+        objective=f"test {stage.value}",
+        stage=stage,
+        input_artifacts=(),
+    )
+    agent_result = AgentResult(
+        target_repo_path="/tmp/repo",
+        artifact_path="runs/0001/response.md",
+        result_id=f"result-{stage.value}",
+        role=role,
+        result_type=(
+            AgentResultType.TEST_RESULT
+            if stage == Stage.TESTER
+            else AgentResultType.QA_RESULT
+        ),
+        execution_status=AgentExecutionStatus.SUCCEEDED,
+        summary=f"{stage.value} completed",
+    )
+    return AgentInvocationResult(
+        invocation=invocation,
+        agent_result=agent_result,
+        command=("codex",),
+        exit_code=0,
+        prompt_path=f"runs/0001_{role}/prompt.md",
+        response_path=f"runs/0001_{role}/response.md",
+        run_log_path=f"runs/0001_{role}/run.log",
+        run_directory=f"runs/0001_{role}",
+        input_artifacts=(),
+        missing_input_artifacts=(),
+    )
 
 
 class ExecutorContractTest(unittest.TestCase):
+    def test_execute_tester_accepts_report_without_explicit_decision_field(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="executor tester routing",
+                task_id="task-executor-tester-routing",
+                workspace_root=root / "workspace",
+            )
+            executor = StageExecutor(result.task_workspace_path)
+            store = TaskStore(result.task_workspace_path)
+
+            store.update_runtime_state(
+                stage=Stage.TESTER,
+                current_owner=constants.ROLE_TESTER,
+                status=TaskStatus.RUNNING,
+            )
+            executor._invoke_role_stage = lambda **_: (
+                constants.ROLE_TESTER,
+                _fake_invocation_result(role=constants.ROLE_TESTER, stage=Stage.TESTER),
+                "# Test Report\n\n- current_step_conclusion: passed with noted gaps\n",
+            )
+
+            outcome = executor._execute_tester()
+
+            context = store.load_task_context()
+            self.assertEqual(outcome.next_stage, Stage.PRODUCT_OWNER_DISPATCH)
+            self.assertEqual(context.current_stage, Stage.PRODUCT_OWNER_DISPATCH)
+            self.assertEqual(context.status, TaskStatus.RUNNING)
+            self.assertIn(constants.ARTIFACT_TEST_REPORT, context.current_artifacts)
+            actions = [event.action for event in store.list_events()]
+            self.assertNotIn("tester_decision_invalid", actions)
+            self.assertNotIn("tester_failed_route_to_product_owner", actions)
+
+    def test_execute_qa_accepts_result_without_explicit_decision_field(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="executor qa routing",
+                task_id="task-executor-qa-routing",
+                workspace_root=root / "workspace",
+            )
+            executor = StageExecutor(result.task_workspace_path)
+            store = TaskStore(result.task_workspace_path)
+
+            store.update_runtime_state(
+                stage=Stage.QA,
+                current_owner=constants.ROLE_QA,
+                status=TaskStatus.RUNNING,
+            )
+            executor._invoke_role_stage = lambda **_: (
+                constants.ROLE_QA,
+                _fake_invocation_result(role=constants.ROLE_QA, stage=Stage.QA),
+                "# QA Result\n\n- acceptance_conclusion: not ready for human gate yet\n",
+            )
+
+            outcome = executor._execute_qa()
+
+            context = store.load_task_context()
+            self.assertEqual(outcome.next_stage, Stage.PRODUCT_OWNER_DISPATCH)
+            self.assertEqual(context.current_stage, Stage.PRODUCT_OWNER_DISPATCH)
+            self.assertEqual(context.status, TaskStatus.RUNNING)
+            self.assertIn(constants.ARTIFACT_QA_RESULT, context.current_artifacts)
+            self.assertNotIn(constants.ARTIFACT_REPAIR_TICKET, context.current_artifacts)
+            actions = [event.action for event in store.list_events()]
+            self.assertNotIn("qa_decision_invalid", actions)
+            self.assertNotIn("qa_failed_route_to_product_owner", actions)
+
+    def test_repair_loop_increment_follows_po_based_on_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="executor repair loop reasons",
+                task_id="task-executor-repair-loop",
+                workspace_root=root / "workspace",
+            )
+            executor = StageExecutor(result.task_workspace_path)
+            store = TaskStore(result.task_workspace_path)
+
+            increment = executor._validate_repair_loop_increment(
+                context=store.load_task_context(),
+                decision=RouteDecision(
+                    next_stage=Stage.DEVELOPER,
+                    task_status=TaskStatus.RUNNING,
+                    based_on_artifacts=(
+                        constants.ARTIFACT_TEST_REPORT,
+                        constants.ARTIFACT_QA_RESULT,
+                    ),
+                    human_advice_disposition=HumanAdviceDisposition.NONE,
+                ),
+            )
+
+            self.assertIsNotNone(increment)
+            assert increment is not None
+            self.assertEqual(increment.loop_count, 1)
+            self.assertEqual(
+                increment.reasons,
+                (
+                    constants.ARTIFACT_TEST_REPORT,
+                    constants.ARTIFACT_QA_RESULT,
+                ),
+            )
+
     def test_parse_route_decision_requires_none_without_pending_advice(self) -> None:
         response = """
 - next_stage: project_manager_research

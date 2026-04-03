@@ -59,8 +59,8 @@ _STATUS_FIELD_ORDER: tuple[str, ...] = (
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="x_claw",
-        description="x_claw is a single-task gateway service.",
+        prog="xclaw",
+        description="xclaw is a single-task gateway service.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
@@ -127,7 +127,7 @@ def _handle_start(args: argparse.Namespace) -> int:
         raise CliCommandError(
             "active task already exists: "
             f"{active.task_id} ({active.task_workspace_path}). "
-            "Use `x_claw status`.",
+            "Use `xclaw status`.",
         )
 
     bootstrap = initialize_task_workspace(
@@ -340,7 +340,7 @@ def _spawn_gateway_worker(
     command = [
         sys.executable,
         "-m",
-        "x_claw.cli",
+        "xclaw.cli",
         "gateway-worker",
         "--task-workspace-path",
         task_workspace_path,

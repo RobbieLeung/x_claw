@@ -76,7 +76,7 @@ class FrontMatterParseError(MarkdownContractError):
 
 
 class FrontMatterValidationError(MarkdownContractError):
-    """Raised when front matter violates the x_claw contract."""
+    """Raised when front matter violates the xclaw contract."""
 
 
 class MarkdownBodyValidationError(MarkdownContractError):
@@ -85,7 +85,7 @@ class MarkdownBodyValidationError(MarkdownContractError):
 
 @dataclass(frozen=True)
 class FrontMatterSchema:
-    """Validation schema for x_claw markdown front matter."""
+    """Validation schema for xclaw markdown front matter."""
 
     required_fields: tuple[str, ...] = FRONT_MATTER_REQUIRED_FIELDS
     allowed_fields: tuple[str, ...] = FRONT_MATTER_ALLOWED_FIELDS

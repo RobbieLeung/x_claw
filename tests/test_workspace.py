@@ -4,8 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from x_claw.markdown import read_markdown_file
-from x_claw.workspace import initialize_task_workspace
+from xclaw.markdown import read_markdown_file
+from xclaw.workspace import initialize_task_workspace
 
 
 class WorkspaceTest(unittest.TestCase):

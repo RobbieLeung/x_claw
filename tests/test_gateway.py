@@ -4,13 +4,13 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from x_claw.gateway import GatewayRunConfig, TaskGateway
-from x_claw.human_io import ensure_supervision_artifacts, read_progress_snapshot
-from x_claw.protocol import Stage, TaskStatus
-from x_claw.executor import StageOutcome
-from x_claw.task_store import TaskStore
-from x_claw.artifact_store import ArtifactStore
-from x_claw.workspace import initialize_task_workspace
+from xclaw.gateway import GatewayRunConfig, TaskGateway
+from xclaw.human_io import ensure_supervision_artifacts, read_progress_snapshot
+from xclaw.protocol import Stage, TaskStatus
+from xclaw.executor import StageOutcome
+from xclaw.task_store import TaskStore
+from xclaw.artifact_store import ArtifactStore
+from xclaw.workspace import initialize_task_workspace
 
 
 class GatewayTest(unittest.TestCase):

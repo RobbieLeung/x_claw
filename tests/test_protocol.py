@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from x_claw import protocol
+from xclaw import protocol
 
 
 class ProtocolTest(unittest.TestCase):

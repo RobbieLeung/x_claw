@@ -8,13 +8,13 @@ import tempfile
 import unittest
 from unittest import mock
 
-from x_claw import cli
-from x_claw.artifact_store import ArtifactStore
-from x_claw.cli import main
-from x_claw.human_io import ensure_supervision_artifacts, publish_progress_update, publish_review_request
-from x_claw.protocol import Stage, TaskStatus
-from x_claw.task_store import TaskStore
-from x_claw.workspace import initialize_task_workspace
+from xclaw import cli
+from xclaw.artifact_store import ArtifactStore
+from xclaw.cli import main
+from xclaw.human_io import ensure_supervision_artifacts, publish_progress_update, publish_review_request
+from xclaw.protocol import Stage, TaskStatus
+from xclaw.task_store import TaskStore
+from xclaw.workspace import initialize_task_workspace
 
 
 def _invoke_main(argv: list[str]) -> tuple[int, str, str]:
@@ -38,7 +38,7 @@ class CliTest(unittest.TestCase):
             repo = root / "repo"
             repo.mkdir(parents=True, exist_ok=False)
             fake_worker = type("Worker", (), {"pid": 321})()
-            with mock.patch("x_claw.cli._spawn_gateway_worker", return_value=fake_worker):
+            with mock.patch("xclaw.cli._spawn_gateway_worker", return_value=fake_worker):
                 exit_code, stdout, stderr = _invoke_main([
                     "start",
                     "--repo", str(repo),

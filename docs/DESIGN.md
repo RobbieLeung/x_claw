@@ -1,8 +1,8 @@
-# x_claw 极简人类监督设计
+# xclaw 极简人类监督设计
 
 ## 1. 目标
 
-`x_claw` 是一个面向单目标仓库、单活跃任务的本地 gateway service。
+`xclaw` 是一个面向单目标仓库、单活跃任务的本地 gateway service。
 
 这一版设计的目标很明确：
 
@@ -13,11 +13,11 @@
 
 用户心智模型只有：
 
-1. `x_claw start`：提交任务
-2. `x_claw status`：看进度
-3. `x_claw status --advise "..."`：中途提建议
-4. `x_claw status --approve` / `--reject --comment "..."`：人工验收
-5. `x_claw stop`：终止任务
+1. `xclaw start`：提交任务
+2. `xclaw status`：看进度
+3. `xclaw status --advise "..."`：中途提建议
+4. `xclaw status --approve` / `--reject --comment "..."`：人工验收
+5. `xclaw stop`：终止任务
 
 ## 2. 内部角色
 
@@ -44,9 +44,9 @@
 
 用户可见命令只保留：
 
-- `x_claw start`
-- `x_claw status`
-- `x_claw stop`
+- `xclaw start`
+- `xclaw status`
+- `xclaw stop`
 
 其中 `status` 同时承担“查看”和“监督输入”两个职责。
 
@@ -55,7 +55,7 @@
 中途建议采用非阻塞模型：
 
 - 用户可以在任务运行期间随时提交建议
-- 建议通过 `x_claw status --advise "..."` 追加到 `human_advice_log`
+- 建议通过 `xclaw status --advise "..."` 追加到 `human_advice_log`
 - 建议不会立即打断当前执行
 - `Product Owner` 只会在正式路由边界统一吸收 pending 建议
 - 一次 `Product Owner` 路由会批量消费当前所有 pending 建议
@@ -65,7 +65,7 @@
 人工验收采用显式请求模型：
 
 - 只有当 `Product Owner` 把流程路由到 `human_gate` 时，任务才进入 `waiting_approval`
-- 进入该状态后，用户通过 `x_claw status --approve` 或 `x_claw status --reject --comment "..."` 完成审阅
+- 进入该状态后，用户通过 `xclaw status --approve` 或 `xclaw status --reject --comment "..."` 完成审阅
 - `approve` 后，任务回到 `product_owner_dispatch` 继续推进
 - `reject` 后，任务同样回到 `product_owner_dispatch`，由 `Product Owner` 重整方案并可再次请求验收
 - 因此人工验收允许多轮往返，不是一次性终局按钮
@@ -182,7 +182,7 @@ Gateway 不再：
 
 ## 7. CLI 监督视图
 
-`x_claw status` 固定输出以下监督字段：
+`xclaw status` 固定输出以下监督字段：
 
 - `active_task_id`
 - `task_workspace_path`

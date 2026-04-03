@@ -484,7 +484,7 @@ class AgentAdapter:
         return candidate
 
     def _resolve_bundled_dir(self, dirname: str) -> Path | None:
-        bundled_root = resources.files("x_claw")
+        bundled_root = resources.files("xclaw")
         resource = bundled_root.joinpath(dirname)
         if not resource.is_dir():
             return None
@@ -621,7 +621,7 @@ class AgentAdapter:
     ) -> str:
         context_items = sorted(invocation.extra_context.items())
         lines: list[str] = [
-            "# x_claw Agent Invocation",
+            "# xclaw Agent Invocation",
             "",
             "## Runtime Metadata",
             "",

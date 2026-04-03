@@ -1,4 +1,4 @@
-"""Human supervision helpers for the simplified x_claw runtime."""
+"""Human supervision helpers for the simplified xclaw runtime."""
 
 from __future__ import annotations
 
@@ -217,7 +217,7 @@ def submit_human_advice(*, task_store: TaskStore, artifact_store: ArtifactStore,
     if context.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.TERMINATED}:
         raise RuntimeError(f"task {context.task_id} is terminal ({context.status.value}); advice is not accepted")
     if context.status == TaskStatus.WAITING_APPROVAL:
-        raise RuntimeError("task is waiting for human review; use `x_claw status --approve` or `--reject --comment ...`.")
+        raise RuntimeError("task is waiting for human review; use `xclaw status --approve` or `--reject --comment ...`.")
     ensure_supervision_artifacts(task_store=task_store, artifact_store=artifact_store)
     entries = read_human_advice_entries(artifact_store=artifact_store)
     advice_id = f"advice-{len(entries) + 1:04d}"
@@ -378,7 +378,7 @@ def publish_review_request(
         timeline_title="Human Review Requested",
         timeline_body=summary,
         current_focus="Waiting for human review on the current proposal.",
-        next_step="Run `x_claw status --approve` or `x_claw status --reject --comment \"...\"`.",
+        next_step="Run `xclaw status --approve` or `xclaw status --reject --comment \"...\"`.",
         needs_human_review=True,
     )
     return review_request_id
@@ -651,7 +651,7 @@ def _default_current_focus(context) -> str:
 
 def _default_next_step(context) -> str:
     if context.status == TaskStatus.WAITING_APPROVAL:
-        return "Run `x_claw status --approve` or `x_claw status --reject --comment \"...\"`."
+        return "Run `xclaw status --approve` or `xclaw status --reject --comment \"...\"`."
     if context.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.TERMINATED}:
         return "No further automatic steps."
     return "Gateway continues automatically."

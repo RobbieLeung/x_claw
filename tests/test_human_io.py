@@ -4,8 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from x_claw.artifact_store import ArtifactStore
-from x_claw.human_io import (
+from xclaw.artifact_store import ArtifactStore
+from xclaw.human_io import (
     ensure_supervision_artifacts,
     pending_human_advice_count,
     publish_progress_update,
@@ -17,9 +17,9 @@ from x_claw.human_io import (
     submit_human_advice,
     submit_review_decision,
 )
-from x_claw.protocol import HumanAdviceDisposition, Stage, TaskStatus
-from x_claw.task_store import TaskStore
-from x_claw.workspace import initialize_task_workspace
+from xclaw.protocol import HumanAdviceDisposition, Stage, TaskStatus
+from xclaw.task_store import TaskStore
+from xclaw.workspace import initialize_task_workspace
 
 
 class HumanIoTest(unittest.TestCase):

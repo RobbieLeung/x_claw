@@ -1,6 +1,6 @@
-# x_claw
+# xclaw
 
-`x_claw` is a local gateway service for the **`xllm` project**, designed around a **single target repository** and **a single active task**.
+`xclaw` is a local gateway service for the **`xllm` project**, designed around a **single target repository** and **a single active task**.
 
 The current positioning is important:
 
@@ -67,7 +67,7 @@ pip install -e .[dev]
 Then verify the CLI is available:
 
 ```bash
-x_claw --version
+xclaw --version
 ```
 
 ## Quick Start
@@ -75,7 +75,7 @@ x_claw --version
 ### 1. Start a task
 
 ```bash
-x_claw start \
+xclaw start \
   --repo /path/to/target-repo \
   --task "Add a README and a minimal usage guide"
 ```
@@ -83,7 +83,7 @@ x_claw start \
 Optionally specify a task ID and workspace root:
 
 ```bash
-x_claw start \
+xclaw start \
   --repo /path/to/target-repo \
   --task "Fix the login flow" \
   --task-id task-login-fix \
@@ -100,7 +100,7 @@ The command prints:
 ### 2. Check status
 
 ```bash
-x_claw status
+xclaw status
 ```
 
 `status` prints a fixed supervision view:
@@ -126,7 +126,7 @@ If there is no active task, `status` returns an `idle` view.
 ### 3. Provide mid-task advice
 
 ```bash
-x_claw status --advise "Narrow the scope and focus on the CLI only"
+xclaw status --advise "Narrow the scope and focus on the CLI only"
 ```
 
 Notes:
@@ -142,13 +142,13 @@ Human review is needed only after the flow enters `human_gate`.
 Approve:
 
 ```bash
-x_claw status --approve --comment "Looks good, proceed to closeout"
+xclaw status --approve --comment "Looks good, proceed to closeout"
 ```
 
 Reject:
 
 ```bash
-x_claw status --reject --comment "Test coverage is still missing failure cases"
+xclaw status --reject --comment "Test coverage is still missing failure cases"
 ```
 
 Notes:
@@ -159,32 +159,32 @@ Notes:
 ### 5. Stop the task
 
 ```bash
-x_claw stop
+xclaw stop
 ```
 
 This marks the current active task as `terminated` and attempts to stop the gateway worker.
 
 ## CLI Overview
 
-### `x_claw start`
+### `xclaw start`
 
 ```bash
-x_claw start --repo REPO --task TEXT [--task-id TASK_ID] [--workspace-root PATH]
+xclaw start --repo REPO --task TEXT [--task-id TASK_ID] [--workspace-root PATH]
 ```
 
-### `x_claw status`
+### `xclaw status`
 
 ```bash
-x_claw status [--workspace-root PATH]
-x_claw status --advise TEXT [--workspace-root PATH]
-x_claw status --approve [--comment TEXT] [--workspace-root PATH]
-x_claw status --reject --comment TEXT [--workspace-root PATH]
+xclaw status [--workspace-root PATH]
+xclaw status --advise TEXT [--workspace-root PATH]
+xclaw status --approve [--comment TEXT] [--workspace-root PATH]
+xclaw status --reject --comment TEXT [--workspace-root PATH]
 ```
 
-### `x_claw stop`
+### `xclaw stop`
 
 ```bash
-x_claw stop [--workspace-root PATH]
+xclaw stop [--workspace-root PATH]
 ```
 
 ### Internal command
@@ -261,13 +261,13 @@ Meaning:
 
 Role prompts are stored in:
 
-- `src/x_claw/agents/product_owner.md`
-- `src/x_claw/agents/project_manager.md`
-- `src/x_claw/agents/developer.md`
-- `src/x_claw/agents/tester.md`
-- `src/x_claw/agents/qa.md`
+- `src/xclaw/agents/product_owner.md`
+- `src/xclaw/agents/project_manager.md`
+- `src/xclaw/agents/developer.md`
+- `src/xclaw/agents/tester.md`
+- `src/xclaw/agents/qa.md`
 
-At runtime, `x_claw` combines:
+At runtime, `xclaw` combines:
 
 - the role prompt
 - the current stage objective
@@ -302,6 +302,6 @@ python -m pytest
 ## References
 
 - Design document: `docs/DESIGN.md`
-- CLI entrypoint: `src/x_claw/cli.py`
-- Gateway loop: `src/x_claw/gateway.py`
-- Stage executor: `src/x_claw/executor.py`
+- CLI entrypoint: `src/xclaw/cli.py`
+- Gateway loop: `src/xclaw/gateway.py`
+- Stage executor: `src/xclaw/executor.py`

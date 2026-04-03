@@ -1,4 +1,4 @@
-"""Stage-driven executor for the x_claw gateway."""
+"""Stage-driven executor for the xclaw gateway."""
 
 from __future__ import annotations
 
@@ -32,10 +32,6 @@ from .human_io import (
     resolve_pending_human_advice,
 )
 
-_DECISION_BULLET_PATTERN = re.compile(
-    r"^-\s*decision:\s*(.+)$",
-    flags=re.IGNORECASE | re.MULTILINE,
-)
 _BULLET_FIELD_TEMPLATE = r"^-\s*{field_name}:\s*(.+)$"
 _TABLE_FIELD_TEMPLATE = r"^\|\s*{field_name}\s*\|\s*([^\|\n]+?)\s*\|$"
 @dataclass(frozen=True)
@@ -325,14 +321,6 @@ class StageExecutor:
         role, invocation_result, response_text = self._invoke_role_stage(
             stage=Stage.TESTER,
         )
-        decision = _parse_tester_decision(response_text)
-        if decision == "invalid":
-            return self._fail_due_to_invalid_decision(
-                stage=Stage.TESTER,
-                published_paths=(),
-                message="tester report must include explicit decision",
-            )
-
         published_paths = self._publish_role_stage_success(
             stage=Stage.TESTER,
             role=role,
@@ -348,13 +336,6 @@ class StageExecutor:
                 ),
             ),
         )
-        if decision == "failed":
-            self.task_store.append_event(
-                actor=constants.ROLE_ORCHESTRATOR,
-                action="tester_failed_route_to_product_owner",
-                input_artifacts=published_paths,
-                result="needs_repair",
-            )
 
         next_stage = fixed_next_stage(Stage.TESTER)
         assert next_stage is not None
@@ -374,14 +355,6 @@ class StageExecutor:
         role, invocation_result, response_text = self._invoke_role_stage(
             stage=Stage.QA,
         )
-        decision = _parse_qa_decision(response_text)
-        if decision == "invalid":
-            return self._fail_due_to_invalid_decision(
-                stage=Stage.QA,
-                published_paths=(),
-                message="qa result must include explicit decision",
-            )
-
         published_paths = self._publish_role_stage_success(
             stage=Stage.QA,
             role=role,
@@ -398,22 +371,6 @@ class StageExecutor:
             ),
         )
 
-        extra_published_paths: tuple[str, ...] = ()
-        if decision == "rejected":
-            repair_ticket = self._publish_repair_ticket(
-                role=owner_for_stage(Stage.QA),
-                response_text=response_text,
-                repair_loop_count=self.task_store.read_repair_loop_count(),
-            )
-            self.task_store.append_event(
-                actor=constants.ROLE_ORCHESTRATOR,
-                action="qa_failed_route_to_product_owner",
-                input_artifacts=published_paths,
-                output_artifacts=(repair_ticket.current_path,),
-                result="needs_repair",
-            )
-            extra_published_paths = (repair_ticket.current_path,)
-
         next_stage = Stage.PRODUCT_OWNER_DISPATCH
         self.task_store.update_runtime_state(
             stage=next_stage,
@@ -423,12 +380,8 @@ class StageExecutor:
         return self._outcome(
             stage_executed=Stage.QA,
             next_stage=next_stage,
-            published_artifacts=(*published_paths, *extra_published_paths),
-            message=(
-                "qa requested repair dispatch"
-                if decision == "rejected"
-                else "qa completed"
-            ),
+            published_artifacts=published_paths,
+            message="qa completed",
         )
 
     def _invoke_role_stage(
@@ -630,11 +583,9 @@ class StageExecutor:
         if constants.ARTIFACT_REPAIR_TICKET in decision.based_on_artifacts:
             reasons.append(constants.ARTIFACT_REPAIR_TICKET)
         if constants.ARTIFACT_TEST_REPORT in decision.based_on_artifacts:
-            test_report_document = self.artifact_store.read_current_artifact(
-                constants.ARTIFACT_TEST_REPORT,
-            )
-            if _parse_tester_decision(test_report_document.body) == "failed":
-                reasons.append(constants.ARTIFACT_TEST_REPORT)
+            reasons.append(constants.ARTIFACT_TEST_REPORT)
+        if constants.ARTIFACT_QA_RESULT in decision.based_on_artifacts:
+            reasons.append(constants.ARTIFACT_QA_RESULT)
 
         if not reasons:
             return None
@@ -1384,39 +1335,6 @@ def _parse_context_artifact_list(
         seen.add(artifact_type)
         parsed.append(artifact_type)
     return tuple(parsed)
-
-
-def _parse_decision_value(response_text: str) -> str | None:
-    match = _DECISION_BULLET_PATTERN.search(response_text)
-    if match is not None:
-        value = match.group(1).strip()
-        if value:
-            return value
-    return None
-
-
-def _parse_tester_decision(response_text: str) -> str:
-    raw = _parse_decision_value(response_text)
-    if raw is None:
-        return "invalid"
-    normalized = raw.strip().lower().replace("-", "_").replace(" ", "_")
-    if normalized == "passed":
-        return "passed"
-    if normalized == "failed":
-        return "failed"
-    return "invalid"
-
-
-def _parse_qa_decision(response_text: str) -> str:
-    raw = _parse_decision_value(response_text)
-    if raw is None:
-        return "invalid"
-    normalized = raw.strip().lower().replace("-", "_").replace(" ", "_")
-    if normalized == "approved":
-        return "approved"
-    if normalized == "rejected":
-        return "rejected"
-    return "invalid"
 
 
 def _utc_now_iso() -> str:

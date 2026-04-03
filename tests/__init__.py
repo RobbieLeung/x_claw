@@ -1,1 +1,1 @@
-"""Test package for x_claw."""
+"""Test package for xclaw."""

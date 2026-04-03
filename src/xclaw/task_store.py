@@ -1,4 +1,4 @@
-"""Task and event-log store for x_claw orchestration state."""
+"""Task and event-log store for xclaw orchestration state."""
 
 from __future__ import annotations
 

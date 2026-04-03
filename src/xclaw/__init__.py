@@ -1,4 +1,4 @@
-"""x_claw package."""
+"""xclaw package."""
 
 __all__ = ["__version__"]
 

@@ -6,10 +6,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from x_claw import protocol as constants
-from x_claw.agent_adapter import AgentAdapter, AgentAdapterError
-from x_claw.gateway import _resolve_launch_dir_child
-from x_claw.workspace import initialize_task_workspace
+from xclaw import protocol as constants
+from xclaw.agent_adapter import AgentAdapter, AgentAdapterError
+from xclaw.gateway import _resolve_launch_dir_child
+from xclaw.workspace import initialize_task_workspace
 
 
 class AgentAdapterAssetResolutionTest(unittest.TestCase):
@@ -30,8 +30,8 @@ class AgentAdapterAssetResolutionTest(unittest.TestCase):
             outside = root / "outside"
             outside.mkdir(parents=True, exist_ok=False)
 
-            with resources.as_file(resources.files("x_claw").joinpath("agents")) as expected_agents, resources.as_file(
-                resources.files("x_claw").joinpath("skills")
+            with resources.as_file(resources.files("xclaw").joinpath("agents")) as expected_agents, resources.as_file(
+                resources.files("xclaw").joinpath("skills")
             ) as expected_skills:
                 original_cwd = Path.cwd()
                 os.chdir(outside)
@@ -59,8 +59,8 @@ class AgentAdapterAssetResolutionTest(unittest.TestCase):
             (outside / "agents").mkdir(parents=True, exist_ok=False)
             (outside / "skills").mkdir(parents=True, exist_ok=False)
 
-            with resources.as_file(resources.files("x_claw").joinpath("agents")) as expected_agents, resources.as_file(
-                resources.files("x_claw").joinpath("skills")
+            with resources.as_file(resources.files("xclaw").joinpath("agents")) as expected_agents, resources.as_file(
+                resources.files("xclaw").joinpath("skills")
             ) as expected_skills:
                 original_cwd = Path.cwd()
                 os.chdir(outside)

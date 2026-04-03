@@ -95,7 +95,7 @@ class ActiveTaskWorkspace:
 
 
 def project_root() -> Path:
-    """Return x_claw repository root path."""
+    """Return xclaw repository root path."""
 
     return Path(__file__).resolve().parents[2]
 
@@ -336,7 +336,7 @@ def render_template(
     if not isinstance(context, Mapping):
         raise TypeError("context must be a mapping.")
 
-    template_text = resources.files("x_claw").joinpath("templates", template_name).read_text(
+    template_text = resources.files("xclaw").joinpath("templates", template_name).read_text(
         encoding="utf-8",
     )
     missing_keys = {

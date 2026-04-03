@@ -1,4 +1,4 @@
-"""Canonical protocol definitions for x_claw runtime and persisted contracts."""
+"""Canonical protocol definitions for xclaw runtime and persisted contracts."""
 
 from __future__ import annotations
 
