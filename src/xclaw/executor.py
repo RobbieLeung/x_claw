@@ -439,9 +439,10 @@ class StageExecutor:
         role = owner_for_stage(stage)
         context = self.task_store.load_task_context()
         input_artifacts: tuple[str, ...] | None = None
+        extra_context: dict[str, str] = {}
 
         if stage == Stage.DEVELOPER:
-            input_artifacts = self._developer_input_artifacts(context=context)
+            input_artifacts, extra_context = self._developer_input_artifacts(context=context)
 
         return AgentInvocation(
             role=role,
@@ -451,29 +452,50 @@ class StageExecutor:
                 unresolved_feedback=unresolved_feedback,
             ),
             input_artifacts=input_artifacts,
+            extra_context=extra_context,
         )
 
-    def _developer_input_artifacts(self, *, context: TaskContext) -> tuple[str, ...]:
+    def _developer_input_artifacts(
+        self,
+        *,
+        context: TaskContext,
+    ) -> tuple[tuple[str, ...], dict[str, str]]:
         references = [
             constants.ARTIFACT_REQUIREMENT_SPEC,
             constants.ARTIFACT_EXECUTION_PLAN,
             constants.ARTIFACT_DEV_HANDOFF,
         ]
-        references.extend(self._developer_context_artifacts(context=context))
-        return tuple(references)
+        selected_context_artifacts, extra_context = self._developer_context_artifacts(context=context)
+        references.extend(selected_context_artifacts)
+        return tuple(references), extra_context
 
-    def _developer_context_artifacts(self, *, context: TaskContext) -> tuple[str, ...]:
+    def _developer_context_artifacts(
+        self,
+        *,
+        context: TaskContext,
+    ) -> tuple[tuple[str, ...], dict[str, str]]:
         if constants.ARTIFACT_DEV_HANDOFF not in context.current_artifacts:
-            return ()
+            return (), {}
 
         handoff_document = self.artifact_store.read_current_artifact(constants.ARTIFACT_DEV_HANDOFF)
-        raw_value = _extract_optional_bullet_field(handoff_document.body, "context_artifacts")
+        raw_value, warning = _extract_developer_context_artifacts_field(handoff_document.body)
         if raw_value is None:
-            return ()
-        return _parse_context_artifact_list(
+            if warning is None:
+                return (), {}
+            return (), {"context_artifacts_warning": warning}
+
+        parsed_context_artifacts = _parse_context_artifact_list(
             raw_value,
             current_artifacts=context.current_artifacts,
         )
+        extra_context = {
+            "resolved_context_artifacts": ", ".join(parsed_context_artifacts)
+            if parsed_context_artifacts
+            else "-",
+        }
+        if warning is not None:
+            extra_context["context_artifacts_warning"] = warning
+        return parsed_context_artifacts, extra_context
 
     def _publish_role_stage_success(
         self,
@@ -1209,6 +1231,32 @@ def _extract_optional_bullet_field(response_text: str, field_name: str) -> str |
     if matches:
         return matches[0]
     return None
+
+
+def _extract_developer_context_artifacts_field(response_text: str) -> tuple[str | None, str | None]:
+    raw_value = _extract_optional_bullet_field(response_text, "context_artifacts")
+    if raw_value is not None:
+        return raw_value, None
+
+    legacy_pattern = re.compile(
+        r"^-\s*`context_artifacts:\s*(.+?)`\s*$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    matches = [match.strip() for match in legacy_pattern.findall(response_text) if match.strip()]
+    if len(matches) > 1:
+        raise ValueError("context_artifacts must appear at most once.")
+    if matches:
+        return (
+            matches[0],
+            "Parsed legacy backtick-wrapped `context_artifacts` directive from dev_handoff.",
+        )
+
+    if "context_artifacts" not in response_text:
+        return None, None
+    return (
+        None,
+        "Found `context_artifacts` text in dev_handoff but no valid directive; expected `- context_artifacts: ...`.",
+    )
 
 
 def _parse_optional_yes_no(raw_value: str | None, *, default: bool, field_name: str) -> bool:

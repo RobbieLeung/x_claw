@@ -113,6 +113,7 @@
 - 这里只列“额外上下文工件”，不必重复 `requirement_spec`、`execution_plan`、`dev_handoff`
 - 只能列当前已存在的 artifact type，例如 `progress`、`implementation_result`、`test_report`、`qa_result`、`repair_ticket`、`review_decision`
 - 如果本轮不需要额外上下文，写 `- context_artifacts: -`
+- `context_artifacts` 这一行要直接写成 bullet，不要把整行再包进反引号
 
 ## 人类监督规则
 

@@ -793,6 +793,13 @@ class AgentAdapter:
             f"prompt_path={prompt_path}",
             f"response_path={response_path}",
         ]
+        if invocation.extra_context:
+            lines.append(
+                "extra_context="
+                + "; ".join(
+                    f"{key}={value}" for key, value in sorted(invocation.extra_context.items())
+                )
+            )
         if missing_input_artifacts:
             lines.append(f"missing_inputs={','.join(missing_input_artifacts)}")
         if failure_reason is not None:

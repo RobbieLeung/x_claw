@@ -7,7 +7,12 @@ import unittest
 from xclaw import protocol as constants
 from xclaw.agent_adapter import AgentInvocation, AgentInvocationResult
 from xclaw.artifact_store import ArtifactStore
-from xclaw.executor import RouteDecision, StageExecutor, _parse_route_decision
+from xclaw.executor import (
+    RouteDecision,
+    StageExecutor,
+    _extract_developer_context_artifacts_field,
+    _parse_route_decision,
+)
 from xclaw.models import AgentResult
 from xclaw.human_io import (
     ensure_supervision_artifacts,
@@ -305,7 +310,10 @@ class ExecutorContractTest(unittest.TestCase):
             self.assertIn(constants.ARTIFACT_PROGRESS, invocation.input_artifacts)
             self.assertIn(constants.ARTIFACT_IMPLEMENTATION_RESULT, invocation.input_artifacts)
             self.assertNotIn(constants.ARTIFACT_TEST_REPORT, invocation.input_artifacts)
-            self.assertEqual(invocation.extra_context, {})
+            self.assertEqual(
+                invocation.extra_context,
+                {"resolved_context_artifacts": "progress, implementation_result"},
+            )
 
     def test_build_developer_invocation_omits_optional_context_without_po_selection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -355,6 +363,236 @@ class ExecutorContractTest(unittest.TestCase):
                     constants.ARTIFACT_EXECUTION_PLAN,
                     constants.ARTIFACT_DEV_HANDOFF,
                 ),
+            )
+            self.assertEqual(invocation.extra_context, {"resolved_context_artifacts": "-"})
+
+    def test_build_developer_invocation_accepts_legacy_backtick_context_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="executor developer legacy extra context",
+                task_id="task-executor-developer-legacy-extra-context",
+                workspace_root=root / "workspace",
+            )
+            executor = StageExecutor(result.task_workspace_path)
+            store = TaskStore(result.task_workspace_path)
+            artifacts = ArtifactStore(result.task_workspace_path)
+
+            def publish_current(artifact_type: str, body: str) -> None:
+                publication = artifacts.publish_artifact(
+                    artifact_type=artifact_type,
+                    body=body,
+                    stage=Stage.PRODUCT_OWNER_DISPATCH,
+                    producer=constants.ROLE_PRODUCT_OWNER,
+                    consumer=constants.ROLE_DEVELOPER,
+                    status="ready",
+                )
+                store.set_current_artifact(
+                    artifact_type=artifact_type,
+                    artifact_path=publication.current_path,
+                )
+
+            publish_current(constants.ARTIFACT_REQUIREMENT_SPEC, "# Requirement Spec\n")
+            publish_current(constants.ARTIFACT_EXECUTION_PLAN, "# Execution Plan\n")
+            publish_current(
+                constants.ARTIFACT_DEV_HANDOFF,
+                "# Developer Handoff\n\n- `context_artifacts: implementation_result, test_report`\n",
+            )
+            publish_current(constants.ARTIFACT_IMPLEMENTATION_RESULT, "# Implementation Result\n")
+            publish_current(constants.ARTIFACT_TEST_REPORT, "# Test Report\n")
+
+            invocation = executor._build_stage_invocation(stage=Stage.DEVELOPER)
+
+            self.assertEqual(
+                invocation.input_artifacts,
+                (
+                    constants.ARTIFACT_REQUIREMENT_SPEC,
+                    constants.ARTIFACT_EXECUTION_PLAN,
+                    constants.ARTIFACT_DEV_HANDOFF,
+                    constants.ARTIFACT_IMPLEMENTATION_RESULT,
+                    constants.ARTIFACT_TEST_REPORT,
+                ),
+            )
+            self.assertEqual(
+                invocation.extra_context,
+                {
+                    "context_artifacts_warning": "Parsed legacy backtick-wrapped `context_artifacts` directive from dev_handoff.",
+                    "resolved_context_artifacts": "implementation_result, test_report",
+                },
+            )
+
+    def test_build_developer_invocation_warns_on_malformed_context_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="executor developer malformed extra context",
+                task_id="task-executor-developer-malformed-extra-context",
+                workspace_root=root / "workspace",
+            )
+            executor = StageExecutor(result.task_workspace_path)
+            store = TaskStore(result.task_workspace_path)
+            artifacts = ArtifactStore(result.task_workspace_path)
+
+            def publish_current(artifact_type: str, body: str) -> None:
+                publication = artifacts.publish_artifact(
+                    artifact_type=artifact_type,
+                    body=body,
+                    stage=Stage.PRODUCT_OWNER_DISPATCH,
+                    producer=constants.ROLE_PRODUCT_OWNER,
+                    consumer=constants.ROLE_DEVELOPER,
+                    status="ready",
+                )
+                store.set_current_artifact(
+                    artifact_type=artifact_type,
+                    artifact_path=publication.current_path,
+                )
+
+            publish_current(constants.ARTIFACT_REQUIREMENT_SPEC, "# Requirement Spec\n")
+            publish_current(constants.ARTIFACT_EXECUTION_PLAN, "# Execution Plan\n")
+            publish_current(
+                constants.ARTIFACT_DEV_HANDOFF,
+                "# Developer Handoff\n\ncontext_artifacts: implementation_result\n",
+            )
+            publish_current(constants.ARTIFACT_IMPLEMENTATION_RESULT, "# Implementation Result\n")
+
+            invocation = executor._build_stage_invocation(stage=Stage.DEVELOPER)
+
+            self.assertEqual(
+                invocation.input_artifacts,
+                (
+                    constants.ARTIFACT_REQUIREMENT_SPEC,
+                    constants.ARTIFACT_EXECUTION_PLAN,
+                    constants.ARTIFACT_DEV_HANDOFF,
+                ),
+            )
+            self.assertEqual(
+                invocation.extra_context,
+                {
+                    "context_artifacts_warning": "Found `context_artifacts` text in dev_handoff but no valid directive; expected `- context_artifacts: ...`.",
+                },
+            )
+
+    def test_extract_developer_context_artifacts_field_accepts_bare_and_legacy_bullets(self) -> None:
+        self.assertEqual(
+            _extract_developer_context_artifacts_field(
+                "# Developer Handoff\n\n- context_artifacts: progress, implementation_result\n"
+            ),
+            ("progress, implementation_result", None),
+        )
+        self.assertEqual(
+            _extract_developer_context_artifacts_field(
+                "# Developer Handoff\n\n- `context_artifacts: progress, implementation_result`\n"
+            ),
+            (
+                "progress, implementation_result",
+                "Parsed legacy backtick-wrapped `context_artifacts` directive from dev_handoff.",
+            ),
+        )
+        self.assertEqual(
+            _extract_developer_context_artifacts_field(
+                "# Developer Handoff\n\n- context_artifacts: -\n"
+            ),
+            ("-", None),
+        )
+
+    def test_build_developer_invocation_rejects_unknown_context_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="executor developer unknown extra context",
+                task_id="task-executor-developer-unknown-extra-context",
+                workspace_root=root / "workspace",
+            )
+            executor = StageExecutor(result.task_workspace_path)
+            store = TaskStore(result.task_workspace_path)
+            artifacts = ArtifactStore(result.task_workspace_path)
+
+            def publish_current(artifact_type: str, body: str) -> None:
+                publication = artifacts.publish_artifact(
+                    artifact_type=artifact_type,
+                    body=body,
+                    stage=Stage.PRODUCT_OWNER_DISPATCH,
+                    producer=constants.ROLE_PRODUCT_OWNER,
+                    consumer=constants.ROLE_DEVELOPER,
+                    status="ready",
+                )
+                store.set_current_artifact(
+                    artifact_type=artifact_type,
+                    artifact_path=publication.current_path,
+                )
+
+            publish_current(constants.ARTIFACT_REQUIREMENT_SPEC, "# Requirement Spec\n")
+            publish_current(constants.ARTIFACT_EXECUTION_PLAN, "# Execution Plan\n")
+            publish_current(
+                constants.ARTIFACT_DEV_HANDOFF,
+                "# Developer Handoff\n\n- context_artifacts: not_a_real_artifact\n",
+            )
+
+            with self.assertRaisesRegex(ValueError, "context_artifacts contains unknown artifact type"):
+                executor._build_stage_invocation(stage=Stage.DEVELOPER)
+
+    def test_build_developer_invocation_rejects_baseline_context_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="executor developer repeated baseline extra context",
+                task_id="task-executor-developer-repeated-baseline-extra-context",
+                workspace_root=root / "workspace",
+            )
+            executor = StageExecutor(result.task_workspace_path)
+            store = TaskStore(result.task_workspace_path)
+            artifacts = ArtifactStore(result.task_workspace_path)
+
+            def publish_current(artifact_type: str, body: str) -> None:
+                publication = artifacts.publish_artifact(
+                    artifact_type=artifact_type,
+                    body=body,
+                    stage=Stage.PRODUCT_OWNER_DISPATCH,
+                    producer=constants.ROLE_PRODUCT_OWNER,
+                    consumer=constants.ROLE_DEVELOPER,
+                    status="ready",
+                )
+                store.set_current_artifact(
+                    artifact_type=artifact_type,
+                    artifact_path=publication.current_path,
+                )
+
+            publish_current(constants.ARTIFACT_REQUIREMENT_SPEC, "# Requirement Spec\n")
+            publish_current(constants.ARTIFACT_EXECUTION_PLAN, "# Execution Plan\n")
+            publish_current(
+                constants.ARTIFACT_DEV_HANDOFF,
+                "# Developer Handoff\n\n- context_artifacts: dev_handoff\n",
+            )
+
+            with self.assertRaisesRegex(ValueError, "context_artifacts must not repeat baseline developer inputs"):
+                executor._build_stage_invocation(stage=Stage.DEVELOPER)
+
+    def test_parse_route_decision_keeps_control_fields_strict(self) -> None:
+        with self.assertRaisesRegex(ValueError, "next_stage must be provided as bullet field"):
+            _parse_route_decision(
+                "\n".join(
+                    [
+                        "- `next_stage: developer`",
+                        "- task_status: running",
+                        "- based_on_artifacts: execution_plan",
+                        "- human_advice_disposition: none",
+                    ]
+                ),
+                stage=Stage.PRODUCT_OWNER_DISPATCH,
+                unresolved_feedback=False,
+                current_artifacts={constants.ARTIFACT_EXECUTION_PLAN: "current/execution_plan.md"},
             )
 
 
