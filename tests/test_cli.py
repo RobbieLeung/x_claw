@@ -73,10 +73,21 @@ class CliTest(unittest.TestCase):
             ])
             self.assertEqual(exit_code, 0)
             self.assertEqual(stderr, "")
+            self.assertIn("active_task_id:", stdout)
+            self.assertIn("task_status:", stdout)
+            self.assertIn("user_summary:", stdout)
             self.assertIn("latest_update:", stdout)
-            self.assertIn("pending_advice_count:", stdout)
-            self.assertIn("latest_review_request_id:", stdout)
-            self.assertIn("progress_path:", stdout)
+            self.assertIn("next_step:", stdout)
+            self.assertIn("needs_human_review:", stdout)
+            self.assertNotIn("task_workspace_path:", stdout)
+            self.assertNotIn("worker_pid:", stdout)
+            self.assertNotIn("current_stage:", stdout)
+            self.assertNotIn("current_owner:", stdout)
+            self.assertNotIn("active_step_id:", stdout)
+            self.assertNotIn("current_focus:", stdout)
+            self.assertNotIn("progress_path:", stdout)
+            self.assertNotIn("pending_advice_count:", stdout)
+            self.assertNotIn("latest_review_request_id:", stdout)
 
             exit_code, stdout, stderr = _invoke_main([
                 "status",
@@ -312,6 +323,7 @@ class CliTest(unittest.TestCase):
                 "user_summary: PO says the task now focuses on the active step, with backward compatibility as the main risk.",
                 stdout,
             )
+            self.assertIn("risks: Keep the schema backward compatible.", stdout)
 
     def test_status_falls_back_to_generated_summary_without_po_user_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -352,7 +364,72 @@ class CliTest(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual(stderr, "")
             self.assertIn("user_summary: Current stage: developer.", stdout)
-            self.assertIn("Human review is not required right now.", stdout)
+            self.assertIn("needs_human_review: no", stdout)
+            self.assertNotIn("risks:", stdout)
+
+    def test_status_shows_pending_advice_only_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            workspace_root = root / "workspace"
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="status pending advice",
+                task_id="task-status-pending-advice",
+                workspace_root=workspace_root,
+            )
+            store = TaskStore(result.task_workspace_path)
+            store.update_runtime_state(gateway_pid=os.getpid(), status=TaskStatus.RUNNING)
+            artifacts = ArtifactStore(result.task_workspace_path)
+            ensure_supervision_artifacts(task_store=store, artifact_store=artifacts)
+
+            exit_code, stdout, stderr = _invoke_main([
+                "status",
+                "--workspace-root", str(workspace_root),
+                "--advise", "please keep the patch small",
+            ])
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr, "")
+            self.assertIn("advice_id:", stdout)
+            self.assertIn("pending_advice_count: 1", stdout)
+
+    def test_status_shows_review_request_id_only_during_human_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            workspace_root = root / "workspace"
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="status review request",
+                task_id="task-status-review-request",
+                workspace_root=workspace_root,
+            )
+            store = TaskStore(result.task_workspace_path)
+            store.update_runtime_state(
+                gateway_pid=os.getpid(),
+                stage=Stage.HUMAN_GATE,
+                current_owner="human_gate",
+                status=TaskStatus.WAITING_APPROVAL,
+            )
+            artifacts = ArtifactStore(result.task_workspace_path)
+            ensure_supervision_artifacts(task_store=store, artifact_store=artifacts)
+            publish_review_request(
+                task_store=store,
+                artifact_store=artifacts,
+                summary="please review",
+                proposal_body="proposal",
+            )
+
+            exit_code, stdout, stderr = _invoke_main([
+                "status",
+                "--workspace-root", str(workspace_root),
+            ])
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr, "")
+            self.assertIn("needs_human_review: yes", stdout)
+            self.assertIn("latest_review_request_id: review-request-0001", stdout)
 
 
 if __name__ == "__main__":

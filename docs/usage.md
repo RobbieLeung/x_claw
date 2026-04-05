@@ -2,7 +2,7 @@
 
 ## 1. 你只需要做什么
 
-这一版 `xclaw` 的用户动作非常少：
+`xclaw` 的用户动作非常少：
 
 - 提交任务
 - 看进度
@@ -70,7 +70,7 @@ progress_path: /abs/path/to/workspace/task-20260401-101500-abcd1234/current/prog
 
 - `xclaw` 在同一 `workspace_root` 下只允许一个活跃任务
 - 启动后 gateway 会自动推进内部流程
-- 用户不需要再进入 attach 或手工编辑交互文件
+- 用户通过命令行查看进度、提交建议和完成验收
 
 ## 4. 看进度
 
@@ -86,25 +86,24 @@ xclaw status
 xclaw status --workspace-root /abs/path/to/workspace_root
 ```
 
-输出固定包含：
+默认输出包含：
 
 - `active_task_id`
-- `task_workspace_path`
-- `worker_pid`
 - `task_status`
-- `current_stage`
-- `current_owner`
-- `active_step_id`
+- `user_summary`
 - `latest_update`
-- `current_focus`
 - `next_step`
-- `risks`
-- `pending_advice_count`
 - `needs_human_review`
-- `latest_review_request_id`
-- `progress_path`
+- `risks`（仅在存在明确风险时显示）
+- `pending_advice_count`（仅在大于 0 时显示）
+- `latest_review_request_id`（仅在等待人工验收时显示）
 
 无活跃任务时会显示 `idle`。
+
+补充说明：
+
+- `user_summary` 优先显示 `Product Owner` 写入的面向用户总结；缺省时由系统根据当前 `progress` 自动生成
+- 更详细的内部字段与路径信息默认不展示；需要时直接查看 `gateway.log`、`runs/` 和 `current/*.md`
 
 ## 5. 中途提建议
 
@@ -183,7 +182,7 @@ workspace/<task_id>/
   runs/
 ```
 
-这一版常见 `current/*.md` 包括：
+常见 `current/*.md` 包括：
 
 - `requirement_spec.md`
 - `execution_plan.md`
@@ -201,12 +200,12 @@ workspace/<task_id>/
 - `human_advice_log.md`
 - `closeout.md`
 
-不再存在：
+其中监督相关工件含义为：
 
-- `conversation.md`
-- `human_input.md`
-- `human_feedback.md`
-- `approval.md`
+- `progress.md`：固定 `Summary` 字段加 append-only `Timeline`
+- `human_advice_log.md`：每条建议包含 `advice_id`、`submitted_at`、`status`、`source` 和正文
+- `review_request.md`：系统进入人工验收时生成的正式审阅请求
+- `review_decision.md`：用户 approve/reject 后生成的正式审阅结论
 
 ## 9. 排障
 
@@ -230,32 +229,13 @@ workspace/<task_id>/
 
 ## 10. 常见问题
 
-### 10.1 为什么没有 `attach` 了？
-
-这一版已经删除 `attach` 和交互模式概念。
-
-用户统一通过：
-
-- `xclaw status`
-- `xclaw status --advise ...`
-- `xclaw status --approve`
-- `xclaw status --reject --comment ...`
-
-完成监督。
-
-### 10.2 为什么没有 `--interaction` 了？
-
-旧的 `interactive` / `markdown` 模式已经废弃。
-
-现在只有一种正式用户接口：命令式监督。
-
-### 10.3 我提的建议什么时候会生效？
+### 10.1 我提的建议什么时候会生效？
 
 建议不会立即打断当前角色执行。
 
 系统会在下一个 `Product Owner` 正式路由边界统一吸收 pending advice。
 
-### 10.4 `reject` 之后任务会结束吗？
+### 10.2 `reject` 之后任务会结束吗？
 
 不会。
 

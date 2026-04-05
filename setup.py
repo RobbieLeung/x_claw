@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 from setuptools import Command, setup
@@ -22,6 +23,14 @@ class RunTests(Command):
 
     def run(self) -> None:
         root = Path(__file__).resolve().parent
+        src_dir = root / "src"
+        env = os.environ.copy()
+        pythonpath_entries = [str(src_dir)]
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        for raw_entry in existing_pythonpath.split(os.pathsep):
+            if raw_entry:
+                pythonpath_entries.append(raw_entry)
+        env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
         cmd = [
             sys.executable,
             "-m",
@@ -32,7 +41,7 @@ class RunTests(Command):
             "-p",
             "test*.py",
         ]
-        raise SystemExit(subprocess.call(cmd, cwd=root))
+        raise SystemExit(subprocess.call(cmd, cwd=root, env=env))
 
 
 setup(cmdclass={"test": RunTests})

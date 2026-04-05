@@ -2,13 +2,13 @@
 
 `xclaw` is a local gateway service for the **`xllm` project**, designed around a **single target repository** and **a single active task**.
 
-The current positioning is important:
+`xclaw` is positioned as follows:
 
 - It is primarily built for `xllm` project workflows
-- It currently supports only the `codex` CLI as its agent execution backend
-- In the current workflow, all code implementation work is executed by `codex`
-- Users only submit tasks, inspect progress, provide advice, and review results
-- The system still keeps internal roles such as `Product Owner`, `Project Manager`, `Developer`, `Tester`, and `QA`
+- It supports only the `codex` CLI as its agent execution backend
+- All code implementation work is executed by `codex`
+- Users submit tasks, inspect progress, provide advice, review results, and can stop tasks when needed
+- The system uses internal roles such as `Product Owner`, `Project Manager`, `Developer`, `Tester`, and `QA`
 - `Product Owner` is the only formal routing owner
 - Only one active task is allowed at a time
 
@@ -22,10 +22,11 @@ For the full design rationale, see `docs/DESIGN.md`.
 - Artifact-driven execution: requirements, plans, handoffs, test results, QA, and review all flow through formal artifacts
 - Local agent execution: internal roles run through the local `codex` CLI
 - Observable progress: `progress.md` maintains a user-readable summary and append-only timeline
+  - The summary includes `latest_update`, `current_focus`, `next_step`, `risks`, `needs_human_review`, and `user_summary`
 
 ## Design Principles
 
-This version follows a few explicit constraints:
+`xclaw` follows a few explicit constraints:
 
 - Single target repository
 - Single active task
@@ -47,7 +48,7 @@ intake
 
 - Python `>=3.10`
 - A locally available `codex` CLI
-- No support yet for agent backends other than `codex` CLI
+- No support for agent backends other than `codex` CLI
 - Optional: `git`, used to collect target repository context
 
 ## Installation
@@ -103,25 +104,21 @@ The command prints:
 xclaw status
 ```
 
-`status` prints a fixed supervision view:
+`status` prints a minimal supervision view:
 
 - `active_task_id`
-- `task_workspace_path`
-- `worker_pid`
 - `task_status`
-- `current_stage`
-- `current_owner`
-- `active_step_id`
+- `user_summary`
 - `latest_update`
-- `current_focus`
 - `next_step`
-- `risks`
-- `pending_advice_count`
 - `needs_human_review`
-- `latest_review_request_id`
-- `progress_path`
+- `risks` when a concrete risk is present
+- `pending_advice_count` when there is pending human advice
+- `latest_review_request_id` while waiting for human review
 
 If there is no active task, `status` returns an `idle` view.
+
+Detailed paths and internal runtime fields are intentionally omitted from the default view; inspect the task workspace, `gateway.log`, `runs/`, and `current/*.md` directly when needed.
 
 ### 3. Provide mid-task advice
 
@@ -238,6 +235,11 @@ Where:
 - `human_advice_log`
 - `review_request`
 - `review_decision`
+
+Notes:
+
+- `progress` keeps a fixed summary plus an append-only timeline
+- `human_advice_log` stores `advice_id`, `submitted_at`, `status`, `source`, and advice body per entry
 
 ## Task Status Model
 
