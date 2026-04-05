@@ -6,7 +6,7 @@
 
 这一版设计的目标很明确：
 
-- 用户只做四件事：提交任务、看进度、提建议、做验收
+- 用户只做五件事：提交任务、看进度、提建议、做验收、必要时终止任务
 - 系统继续保留内部多角色协作能力
 - 人类不再参与细粒度状态机，只负责监督和最终审阅
 - 正式接口、正式状态和正式工件全部围绕这个模型收敛
@@ -95,7 +95,7 @@ intake
 
 ### 4.2 TaskStatus
 
-正式任务状态只保留：
+正式任务状态为：
 
 - `running`
 - `waiting_approval`
@@ -103,11 +103,9 @@ intake
 - `failed`
 - `terminated`
 
-不再保留 `waiting_human_feedback`。
-
 ### 4.3 Route Decision
 
-`Product Owner` 的正式路由工件仍为 `route_decision`，字段为：
+`Product Owner` 的正式路由工件为 `route_decision`，字段为：
 
 - `- next_stage: <stage>|-`
 - `- task_status: running|terminated`
@@ -123,9 +121,9 @@ intake
 
 ## 5. 正式工件
 
-### 5.1 保留工件
+### 5.1 主流程工件
 
-主流程工件继续保留：
+主流程工件包括：
 
 - `requirement_spec`
 - `execution_plan`
@@ -139,68 +137,54 @@ intake
 - `route_decision`
 - `closeout`
 
-### 5.2 新监督工件
+### 5.2 监督工件
 
-新增 4 个正式监督工件：
+正式监督工件包括：
 
 - `progress`
   - 对用户可读的进度摘要
-  - 包含 `Summary` bullets 和 append-only `Timeline`
+  - 包含固定 `Summary` bullets：`latest_update`、`current_focus`、`next_step`、`risks`、`needs_human_review`、`user_summary`
+  - 包含 append-only `Timeline`
 - `human_advice_log`
   - 中途建议队列
-  - 每条 advice 带 `advice_id`、`submitted_at`、`status`、正文
+  - 每条 advice 带 `advice_id`、`submitted_at`、`status`、`source`、正文
 - `review_request`
   - `Product Owner` 请求人工验收时发布
 - `review_decision`
   - 用户 approve/reject 后发布
 
-### 5.3 删除工件
-
-以下旧交互工件彻底删除：
-
-- `conversation`
-- `human_input`
-- `human_feedback`
-- `approval`
-
 ## 6. Gateway 行为
 
 Gateway 负责：
 
-- 初始化工作区和正式工件
+- 在 worker 启动后确保监督工件存在
 - 按合法路由推进阶段
 - 维护 `progress`
 - 接受 CLI 提交的监督动作结果
 - 在 `waiting_approval` 时暂停自动推进
 - 执行修复回路上限和终态保护
 
-Gateway 不再：
+补充说明：
 
-- 轮询 `human_input.md`
-- 管理 `interactive` / `markdown` 两种交互模式
-- 在正式流程中等待“人工反馈检查点”
+- 工作区初始化由 `xclaw start` 完成
+- gateway worker 启动后会发布在线进度并开始自动推进
 
 ## 7. CLI 监督视图
 
-`xclaw status` 固定输出以下监督字段：
+`xclaw status` 默认输出以下精简监督字段：
 
 - `active_task_id`
-- `task_workspace_path`
-- `worker_pid`
 - `task_status`
-- `current_stage`
-- `current_owner`
-- `active_step_id`
+- `user_summary`
 - `latest_update`
-- `current_focus`
 - `next_step`
-- `risks`
-- `pending_advice_count`
 - `needs_human_review`
-- `latest_review_request_id`
-- `progress_path`
+- `risks`（仅在存在明确风险时显示）
+- `pending_advice_count`（仅在大于 0 时显示）
+- `latest_review_request_id`（仅在等待人工验收时显示）
 
 其中：
 
-- `active_step_id` 来自 `execution_plan`
+- `user_summary` 优先使用 `Product Owner` 写入的面向用户自然语言总结；缺省时由系统根据 `progress` 自动生成
 - 其余用户可读监督信息来自 `progress`
+- `task_workspace_path`、`worker_pid`、`current_stage`、`current_owner`、`active_step_id`、`current_focus`、`progress_path` 等详细信息不再默认显示，用户可直接查看任务工作区与运行日志

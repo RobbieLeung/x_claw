@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-import re
 import signal
 import subprocess
 import sys
@@ -36,24 +35,16 @@ class CliCommandError(RuntimeError):
     """Raised when one CLI command fails with user-facing context."""
 
 
-_ACTIVE_STEP_PATTERN = re.compile(r"^-\s*active_step_id:\s*(.+)$", re.MULTILINE)
 _STATUS_FIELD_ORDER: tuple[str, ...] = (
     "active_task_id",
-    "task_workspace_path",
-    "worker_pid",
     "task_status",
-    "current_stage",
-    "current_owner",
-    "active_step_id",
     "user_summary",
     "latest_update",
-    "current_focus",
     "next_step",
+    "needs_human_review",
     "risks",
     "pending_advice_count",
-    "needs_human_review",
     "latest_review_request_id",
-    "progress_path",
 )
 
 
@@ -168,48 +159,30 @@ def _handle_status(args: argparse.Namespace) -> int:
 def _idle_status_view() -> dict[str, str]:
     return {
         "active_task_id": "-",
-        "task_workspace_path": "-",
-        "worker_pid": "-",
         "task_status": "idle",
-        "current_stage": "-",
-        "current_owner": "-",
-        "active_step_id": "-",
-        "user_summary": "-",
-        "latest_update": "-",
-        "current_focus": "-",
-        "next_step": "-",
+        "user_summary": "No active task is running.",
+        "latest_update": "No active task is running.",
+        "next_step": "Run `xclaw start --repo ... --task ...` to begin.",
+        "needs_human_review": "no",
         "risks": "-",
         "pending_advice_count": "0",
-        "needs_human_review": "no",
         "latest_review_request_id": "-",
-        "progress_path": "-",
     }
 
 
 def _build_status_view(*, active, task_store: TaskStore, artifact_store: ArtifactStore) -> dict[str, str]:
     context = task_store.load_task_context()
     progress = read_progress_snapshot(artifact_store=artifact_store)
-    progress_path = _resolve_current_artifact_path(
-        context.task_workspace_path,
-        context.current_artifacts.get(constants.ARTIFACT_PROGRESS),
-    )
     return {
         "active_task_id": active.task_id,
-        "task_workspace_path": active.task_workspace_path,
-        "worker_pid": str(active.gateway_pid),
         "task_status": context.status.value,
-        "current_stage": context.current_stage.value,
-        "current_owner": context.current_owner,
-        "active_step_id": _read_active_step_id(context),
         "user_summary": _build_user_summary(progress=progress, context=context),
         "latest_update": progress.latest_update,
-        "current_focus": progress.current_focus,
         "next_step": progress.next_step,
+        "needs_human_review": "yes" if progress.needs_human_review else "no",
         "risks": progress.risks,
         "pending_advice_count": str(pending_human_advice_count(artifact_store=artifact_store)),
-        "needs_human_review": "yes" if progress.needs_human_review else "no",
         "latest_review_request_id": read_latest_review_request_id(artifact_store=artifact_store),
-        "progress_path": progress_path,
     }
 
 
@@ -273,6 +246,15 @@ def _print_action_result(action_result: tuple[tuple[str, str], ...]) -> None:
 
 def _print_status_view(status_view: dict[str, str]) -> None:
     for field in _STATUS_FIELD_ORDER:
+        if field == "risks" and status_view[field] == "-":
+            continue
+        if field == "pending_advice_count" and status_view[field] in {"0", "-"}:
+            continue
+        if (
+            field == "latest_review_request_id"
+            and (status_view[field] == "-" or status_view.get("needs_human_review") != "yes")
+        ):
+            continue
         print(f"{field}: {status_view[field]}")
 
 
@@ -385,30 +367,6 @@ def _build_worker_environment(command_launch_dir: Path) -> dict[str, str]:
 
     env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
     return env
-
-
-def _read_active_step_id(context: object) -> str:
-    execution_plan_path = getattr(context, "current_artifacts", {}).get(constants.ARTIFACT_EXECUTION_PLAN)
-    if not execution_plan_path:
-        return "-"
-
-    resolved_path = Path(getattr(context, "task_workspace_path")) / execution_plan_path
-    try:
-        content = resolved_path.read_text(encoding="utf-8")
-    except OSError:
-        return "-"
-
-    match = _ACTIVE_STEP_PATTERN.search(content)
-    if match is None:
-        return "-"
-    value = match.group(1).strip()
-    return value or "-"
-
-
-def _resolve_current_artifact_path(task_workspace_path: str, artifact_path: str | None) -> Path:
-    if artifact_path is None:
-        return Path(task_workspace_path) / constants.CURRENT_DIRNAME
-    return (Path(task_workspace_path) / artifact_path).resolve()
 
 
 if __name__ == "__main__":  # pragma: no cover
