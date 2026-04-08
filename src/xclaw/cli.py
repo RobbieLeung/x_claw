@@ -65,6 +65,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     status_parser = subparsers.add_parser("status", help="Show task progress and optionally submit supervision input")
     status_parser.add_argument("--workspace-root", type=Path, help="Optional workspace root override")
+    status_parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Continuously print status snapshots until interrupted",
+    )
+    status_parser.add_argument(
+        "--watch-interval",
+        type=float,
+        default=3.0,
+        help="Polling interval in seconds used with --watch (default: 3.0)",
+    )
     action_group = status_parser.add_mutually_exclusive_group()
     action_group.add_argument("--advise", help="Submit one human advice message")
     action_group.add_argument("--approve", action="store_true", help="Approve the current human review request")
@@ -140,6 +151,28 @@ def _handle_start(args: argparse.Namespace) -> int:
 
 
 def _handle_status(args: argparse.Namespace) -> int:
+    if args.watch_interval <= 0:
+        raise CliCommandError("`--watch-interval` must be > 0.")
+    if args.watch and (args.advise or args.approve or args.reject or args.comment):
+        raise CliCommandError("`--watch` can only be used with plain `xclaw status`.")
+    if args.watch:
+        return _watch_status(args)
+    return _run_status_once(args)
+
+
+def _watch_status(args: argparse.Namespace) -> int:
+    try:
+        while True:
+            _print_watch_header()
+            _run_status_once(args)
+            print()
+            sys.stdout.flush()
+            time.sleep(args.watch_interval)
+    except KeyboardInterrupt:
+        return 0
+
+
+def _run_status_once(args: argparse.Namespace) -> int:
     workspace_root = _resolve_cli_workspace_root(args.workspace_root)
     active = find_active_task_workspace(workspace_root)
     if active is None:
@@ -154,6 +187,10 @@ def _handle_status(args: argparse.Namespace) -> int:
     _print_action_result(_run_status_action(args, task_store=task_store, artifact_store=artifact_store))
     _print_status_view(_build_status_view(active=active, task_store=task_store, artifact_store=artifact_store))
     return 0
+
+
+def _print_watch_header() -> None:
+    print(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
 
 
 def _idle_status_view() -> dict[str, str]:

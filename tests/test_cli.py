@@ -97,6 +97,77 @@ class CliTest(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn("requires `--comment`", stderr)
 
+    def test_status_watch_prints_snapshots_until_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            workspace_root = root / "workspace"
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="status watch",
+                task_id="task-status-watch",
+                workspace_root=workspace_root,
+            )
+            store = TaskStore(result.task_workspace_path)
+            store.update_runtime_state(gateway_pid=os.getpid())
+            artifacts = ArtifactStore(result.task_workspace_path)
+            ensure_supervision_artifacts(task_store=store, artifact_store=artifacts)
+
+            def _interrupt_after_first_sleep(_: float) -> None:
+                raise KeyboardInterrupt
+
+            with mock.patch("xclaw.cli.time.sleep", side_effect=_interrupt_after_first_sleep):
+                exit_code, stdout, stderr = _invoke_main([
+                    "status",
+                    "--workspace-root", str(workspace_root),
+                    "--watch",
+                    "--watch-interval", "0.1",
+                ])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr, "")
+            self.assertIn("--- ", stdout)
+            self.assertIn("active_task_id:", stdout)
+            self.assertIn("task_status:", stdout)
+
+    def test_status_watch_rejects_invalid_combinations_and_interval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            workspace_root = root / "workspace"
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="status watch validation",
+                task_id="task-status-watch-validation",
+                workspace_root=workspace_root,
+            )
+            store = TaskStore(result.task_workspace_path)
+            store.update_runtime_state(gateway_pid=os.getpid())
+            artifacts = ArtifactStore(result.task_workspace_path)
+            ensure_supervision_artifacts(task_store=store, artifact_store=artifacts)
+
+            exit_code, stdout, stderr = _invoke_main([
+                "status",
+                "--workspace-root", str(workspace_root),
+                "--watch",
+                "--advise", "hello",
+            ])
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("`--watch` can only be used", stderr)
+
+            exit_code, stdout, stderr = _invoke_main([
+                "status",
+                "--workspace-root", str(workspace_root),
+                "--watch",
+                "--watch-interval", "0",
+            ])
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("`--watch-interval` must be > 0", stderr)
+
     def test_status_advise_is_blocked_while_waiting_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
