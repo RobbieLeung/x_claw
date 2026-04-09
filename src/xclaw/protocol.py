@@ -10,7 +10,7 @@ CONFIG_KEY_WORKSPACE_ROOT: Final = "workspace_root"
 CONFIG_KEY_MAX_REPAIR_LOOPS: Final = "max_repair_loops"
 
 DEFAULT_WORKSPACE_ROOT: Final = "workspace"
-DEFAULT_MAX_REPAIR_LOOPS: Final = 2
+DEFAULT_MAX_REPAIR_LOOPS: Final = 50
 
 TASK_STATUS_RUNNING: Final = "running"
 TASK_STATUS_WAITING_APPROVAL: Final = "waiting_approval"
