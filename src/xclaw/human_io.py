@@ -9,16 +9,27 @@ import re
 
 from . import protocol as constants
 from .artifact_store import ArtifactStore
-from .protocol import HumanAdviceDisposition, ReviewDecision, Stage, TaskStatus, fixed_next_stage, owner_for_stage
+from .protocol import (
+    HumanAdviceDisposition,
+    ReviewDecision,
+    ReviewKind,
+    Stage,
+    TaskStatus,
+    fixed_next_stage,
+    owner_for_stage,
+)
 from .task_store import TaskStore
 
 _SUMMARY_FIELD_PATTERN = r"^-\s*{field}:\s*(.+)$"
 _ADVICE_SECTION_RE = re.compile(r"^###\s+(?P<advice_id>[^\n]+)\n(?P<body>.*?)(?=^###\s+|\Z)", re.MULTILINE | re.DOTALL)
 _REVIEW_REQUEST_ID_RE = re.compile(r"^-\s*review_request_id:\s*(.+)$", re.MULTILINE)
 _REVIEW_DECISION_ID_RE = re.compile(r"^-\s*review_decision_id:\s*(.+)$", re.MULTILINE)
+_REVIEW_KIND_RE = re.compile(r"^-\s*review_kind:\s*(.+)$", re.MULTILINE)
+_PLAN_REVISION_RE = re.compile(r"^-\s*plan_revision:\s*(.+)$", re.MULTILINE)
 _DECISION_RE = re.compile(r"^-\s*decision:\s*(.+)$", re.MULTILINE)
 _STATUS_RE = re.compile(r"^-\s*status:\s*(.+)$", re.MULTILINE)
 _SUBMITTED_AT_RE = re.compile(r"^-\s*submitted_at:\s*(.+)$", re.MULTILINE)
+_REQUESTED_AT_RE = re.compile(r"^-\s*requested_at:\s*(.+)$", re.MULTILINE)
 _SOURCE_RE = re.compile(r"^-\s*source:\s*(.+)$", re.MULTILINE)
 
 
@@ -88,6 +99,22 @@ class AdviceEntry:
 class ReviewRequest:
     review_request_id: str
     requested_at: str
+    review_kind: ReviewKind
+    plan_revision: str | None
+    summary: str
+    focus_items: tuple[str, ...]
+    body: str
+
+
+@dataclass(frozen=True)
+class ReviewDecisionRecord:
+    review_request_id: str
+    review_decision_id: str
+    review_kind: ReviewKind
+    plan_revision: str | None
+    decision: str
+    submitted_at: str
+    comment: str
     body: str
 
 
@@ -95,6 +122,8 @@ class ReviewRequest:
 class ReviewDecisionSubmissionResult:
     review_request_id: str
     review_decision_id: str
+    review_kind: str
+    plan_revision: str | None
     decision: str
     current_stage: Stage
     current_owner: str
@@ -337,9 +366,13 @@ def publish_review_request(
     artifact_store: ArtifactStore,
     summary: str,
     proposal_body: str,
+    review_kind: ReviewKind | str,
+    plan_revision: str | None = None,
     focus_items: tuple[str, ...] = (),
 ) -> str:
     context = task_store.load_task_context()
+    normalized_review_kind = ReviewKind(review_kind)
+    normalized_plan_revision = _normalize_optional_metadata(plan_revision)
     review_request_id = _next_artifact_sequence_id(
         artifact_store=artifact_store,
         artifact_type=constants.ARTIFACT_REVIEW_REQUEST,
@@ -350,6 +383,8 @@ def publish_review_request(
     body = _review_request_body(
         review_request_id=review_request_id,
         requested_at=_utc_now_iso(),
+        review_kind=normalized_review_kind,
+        plan_revision=normalized_plan_revision,
         summary=summary,
         proposal_body=proposal_body,
         focus_items=focus_items,
@@ -369,7 +404,16 @@ def publish_review_request(
         action="review_requested",
         output_artifacts=(publication_path,),
         result="waiting_approval",
-        notes=f"review_request_id={review_request_id}",
+        notes=(
+            f"review_request_id={review_request_id}; "
+            f"review_kind={normalized_review_kind.value}; "
+            f"plan_revision={normalized_plan_revision or '-'}"
+        ),
+    )
+    current_focus = (
+        "Waiting for human confirmation on the current plan revision."
+        if normalized_review_kind == ReviewKind.PLAN
+        else "Waiting for human review on the current delivery proposal."
     )
     publish_progress_update(
         task_store=task_store,
@@ -377,7 +421,7 @@ def publish_review_request(
         latest_update=f"Human review requested: {review_request_id}",
         timeline_title="Human Review Requested",
         timeline_body=summary,
-        current_focus="Waiting for human review on the current proposal.",
+        current_focus=current_focus,
         next_step="Run `xclaw status --approve` or `xclaw status --reject --comment \"...\"`.",
         needs_human_review=True,
     )
@@ -385,14 +429,64 @@ def publish_review_request(
 
 
 def read_latest_review_request_id(*, artifact_store: ArtifactStore) -> str:
+    review_request = read_current_review_request(artifact_store=artifact_store)
+    if review_request is None:
+        return "-"
+    return review_request.review_request_id
+
+
+def read_current_review_request(*, artifact_store: ArtifactStore) -> ReviewRequest | None:
     path = artifact_store.current_artifact_path(constants.ARTIFACT_REVIEW_REQUEST)
     if not path.exists():
-        return "-"
+        return None
     body = path.read_text(encoding="utf-8")
-    match = _REVIEW_REQUEST_ID_RE.search(body)
-    if match is None:
-        return "-"
-    return match.group(1).strip() or "-"
+    review_request_id = _extract_first_match(_REVIEW_REQUEST_ID_RE, body, default="-")
+    if review_request_id == "-":
+        return None
+    requested_at = _extract_first_match(_REQUESTED_AT_RE, body, default="-")
+    review_kind = _parse_review_kind(_extract_first_match(_REVIEW_KIND_RE, body, default=ReviewKind.DELIVERY.value))
+    plan_revision = _normalize_optional_metadata(
+        _extract_first_match(_PLAN_REVISION_RE, body, default="-"),
+    )
+    summary = _extract_section_text(body, "Request Summary")
+    focus_items = _extract_section_bullets(body, "Suggested Focus")
+    return ReviewRequest(
+        review_request_id=review_request_id,
+        requested_at=requested_at,
+        review_kind=review_kind,
+        plan_revision=plan_revision,
+        summary=summary,
+        focus_items=focus_items,
+        body=body,
+    )
+
+
+def read_current_review_decision(*, artifact_store: ArtifactStore) -> ReviewDecisionRecord | None:
+    path = artifact_store.current_artifact_path(constants.ARTIFACT_REVIEW_DECISION)
+    if not path.exists():
+        return None
+    body = path.read_text(encoding="utf-8")
+    review_decision_id = _extract_first_match(_REVIEW_DECISION_ID_RE, body, default="-")
+    if review_decision_id == "-":
+        return None
+    review_request_id = _extract_first_match(_REVIEW_REQUEST_ID_RE, body, default="-")
+    review_kind = _parse_review_kind(_extract_first_match(_REVIEW_KIND_RE, body, default=ReviewKind.DELIVERY.value))
+    plan_revision = _normalize_optional_metadata(
+        _extract_first_match(_PLAN_REVISION_RE, body, default="-"),
+    )
+    decision = _extract_first_match(_DECISION_RE, body, default="-")
+    submitted_at = _extract_first_match(_SUBMITTED_AT_RE, body, default="-")
+    comment = _extract_section_text(body, "Comment")
+    return ReviewDecisionRecord(
+        review_request_id=review_request_id,
+        review_decision_id=review_decision_id,
+        review_kind=review_kind,
+        plan_revision=plan_revision,
+        decision=decision,
+        submitted_at=submitted_at,
+        comment=comment,
+        body=body,
+    )
 
 
 def submit_review_decision(
@@ -408,8 +502,8 @@ def submit_review_decision(
     if context.current_stage != Stage.HUMAN_GATE or context.status != TaskStatus.WAITING_APPROVAL:
         raise RuntimeError("human review can only be submitted while task is waiting for approval.")
     normalized_decision = ReviewDecision(decision).value
-    review_request_id = read_latest_review_request_id(artifact_store=artifact_store)
-    if review_request_id == "-":
+    review_request = read_current_review_request(artifact_store=artifact_store)
+    if review_request is None:
         raise RuntimeError("review request is missing; cannot submit review decision.")
     review_decision_id = _next_artifact_sequence_id(
         artifact_store=artifact_store,
@@ -426,8 +520,10 @@ def submit_review_decision(
         artifact_store=artifact_store,
         artifact_type=constants.ARTIFACT_REVIEW_DECISION,
         body=_review_decision_body(
-            review_request_id=review_request_id,
+            review_request_id=review_request.review_request_id,
             review_decision_id=review_decision_id,
+            review_kind=review_request.review_kind,
+            plan_revision=review_request.plan_revision,
             decision=normalized_decision,
             comment=normalized_comment,
         ),
@@ -448,7 +544,12 @@ def submit_review_decision(
         action="review_decision_submitted",
         output_artifacts=(publication_path,),
         result=normalized_decision,
-        notes=f"review_request_id={review_request_id}; review_decision_id={review_decision_id}",
+        notes=(
+            f"review_request_id={review_request.review_request_id}; "
+            f"review_decision_id={review_decision_id}; "
+            f"review_kind={review_request.review_kind.value}; "
+            f"plan_revision={review_request.plan_revision or '-'}"
+        ),
     )
     publish_progress_update(
         task_store=task_store,
@@ -462,8 +563,10 @@ def submit_review_decision(
     )
     updated_context = task_store.load_task_context()
     return ReviewDecisionSubmissionResult(
-        review_request_id=review_request_id,
+        review_request_id=review_request.review_request_id,
         review_decision_id=review_decision_id,
+        review_kind=review_request.review_kind.value,
+        plan_revision=review_request.plan_revision,
         decision=normalized_decision,
         current_stage=updated_context.current_stage,
         current_owner=updated_context.current_owner,
@@ -572,6 +675,35 @@ def _extract_body_after_heading(section_body: str, heading: str) -> str:
     return suffix.strip() or "-"
 
 
+def _extract_section_text(body: str, heading: str) -> str:
+    marker = f"## {heading}"
+    if marker not in body:
+        return "-"
+    _, suffix = body.split(marker, maxsplit=1)
+    lines: list[str] = []
+    for line in suffix.strip().splitlines():
+        if line.startswith("## "):
+            break
+        lines.append(line)
+    text = "\n".join(lines).strip()
+    return text or "-"
+
+
+def _extract_section_bullets(body: str, heading: str) -> tuple[str, ...]:
+    text = _extract_section_text(body, heading)
+    if text == "-":
+        return ()
+    values: list[str] = []
+    for line in text.splitlines():
+        normalized = line.strip()
+        if not normalized.startswith("- "):
+            continue
+        item = normalized[2:].strip()
+        if item:
+            values.append(item)
+    return tuple(values)
+
+
 def _extract_first_match(pattern: re.Pattern[str], text: str, *, default: str) -> str:
     match = pattern.search(text)
     if match is None:
@@ -580,10 +712,30 @@ def _extract_first_match(pattern: re.Pattern[str], text: str, *, default: str) -
     return value or default
 
 
+def _parse_review_kind(raw_value: str) -> ReviewKind:
+    normalized = raw_value.strip().lower().replace("-", "_").replace(" ", "_")
+    try:
+        return ReviewKind(normalized)
+    except ValueError as exc:
+        allowed = ", ".join(constants.REVIEW_KIND_NAMES)
+        raise ValueError(f"review_kind must be one of: {allowed}; got {raw_value!r}.") from exc
+
+
+def _normalize_optional_metadata(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized or normalized == "-":
+        return None
+    return normalized
+
+
 def _review_request_body(
     *,
     review_request_id: str,
     requested_at: str,
+    review_kind: ReviewKind,
+    plan_revision: str | None,
     summary: str,
     proposal_body: str,
     focus_items: tuple[str, ...],
@@ -599,6 +751,8 @@ def _review_request_body(
             f"- requested_at: {requested_at}",
             f"- requested_by: {constants.ROLE_PRODUCT_OWNER}",
             f"- source_stage: {Stage.PRODUCT_OWNER_DISPATCH.value}",
+            f"- review_kind: {review_kind.value}",
+            f"- plan_revision: {plan_revision or '-'}",
             "",
             "## Request Summary",
             "",
@@ -616,7 +770,15 @@ def _review_request_body(
     )
 
 
-def _review_decision_body(*, review_request_id: str, review_decision_id: str, decision: str, comment: str) -> str:
+def _review_decision_body(
+    *,
+    review_request_id: str,
+    review_decision_id: str,
+    review_kind: ReviewKind,
+    plan_revision: str | None,
+    decision: str,
+    comment: str,
+) -> str:
     return "\n".join(
         [
             "# Review Decision",
@@ -625,6 +787,8 @@ def _review_decision_body(*, review_request_id: str, review_decision_id: str, de
             "",
             f"- review_request_id: {review_request_id}",
             f"- review_decision_id: {review_decision_id}",
+            f"- review_kind: {review_kind.value}",
+            f"- plan_revision: {plan_revision or '-'}",
             f"- decision: {decision}",
             f"- submitted_at: {_utc_now_iso()}",
             f"- source: status",
@@ -639,7 +803,7 @@ def _review_decision_body(*, review_request_id: str, review_decision_id: str, de
 
 def _default_current_focus(context) -> str:
     if context.status == TaskStatus.WAITING_APPROVAL:
-        return "Waiting for human review on the current proposal."
+        return "Waiting for human review on the current request."
     if context.status == TaskStatus.COMPLETED:
         return "Task completed."
     if context.status == TaskStatus.FAILED:
@@ -664,6 +828,7 @@ def _utc_now_iso() -> str:
 __all__ = [
     "AdviceEntry",
     "ProgressSnapshot",
+    "ReviewDecisionRecord",
     "ReviewDecisionSubmissionResult",
     "ReviewRequest",
     "ensure_supervision_artifacts",
@@ -671,6 +836,8 @@ __all__ = [
     "pending_human_advice_count",
     "publish_progress_update",
     "publish_review_request",
+    "read_current_review_decision",
+    "read_current_review_request",
     "read_human_advice_entries",
     "read_latest_review_request_id",
     "read_progress_snapshot",

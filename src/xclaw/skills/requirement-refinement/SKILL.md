@@ -12,7 +12,7 @@ description: Use when a task statement is ambiguous and must be refined into a p
 - 用户原话过于简短，难以直接变成可执行任务
 - 任务目标不够具体，容易出现多种解释
 - 需要先澄清范围、非目标、限制条件或验收标准
-- 你要生成 `requirement_spec` 或支持 `research_brief`
+- 你要收敛 `plan` 中的目标、范围、非目标、验收标准，或支持方案调研
 - 你要判断当前材料是否足以支持继续规划、实现、测试或验收
 
 ## 何时不要用

@@ -49,7 +49,7 @@ description: Use when reviewing delivery readiness in xClaw and you need a struc
 - “测试跑通了，需求应该也差不多满足了。”
 - “没有明显 blocker，就默认可以送审。”
 - “这类风险大概率不会发生，不必写进结论。”
-- “QA 不需要太具体，下游自己理解就好。”
+- “验收意见不需要太具体，下游自己理解就好。”
 
 ## 完成前验证
 

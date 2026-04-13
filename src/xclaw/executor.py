@@ -17,6 +17,7 @@ from .models import (
 from .protocol import (
     AgentExecutionStatus,
     HumanAdviceDisposition,
+    ReviewKind,
     Stage,
     TaskStatus,
     fixed_next_stage,
@@ -28,6 +29,7 @@ from .human_io import (
     has_pending_human_advice,
     publish_progress_update,
     publish_review_request,
+    read_current_review_decision,
     read_progress_snapshot,
     resolve_pending_human_advice,
 )
@@ -55,6 +57,7 @@ class RouteDecision:
     task_status: TaskStatus
     based_on_artifacts: tuple[str, ...]
     human_advice_disposition: HumanAdviceDisposition
+    review_kind_requested: ReviewKind | None
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,16 @@ class RepairLoopIncrement:
 
     loop_count: int
     reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PlanSnapshot:
+    """Minimal parsed plan metadata used by routing constraints."""
+
+    plan_revision: str
+    human_confirmation_required: bool
+    human_confirmation_items: tuple[str, ...]
+    active_subtask_id: str | None
 
 
 @dataclass(frozen=True)
@@ -114,16 +127,14 @@ class StageExecutor:
                 return self._advance_intake()
             if context.current_stage == Stage.PRODUCT_OWNER_REFINEMENT:
                 return self._execute_product_owner_stage(stage=Stage.PRODUCT_OWNER_REFINEMENT)
-            if context.current_stage == Stage.PROJECT_MANAGER_RESEARCH:
-                return self._execute_project_manager_research()
+            if context.current_stage == Stage.ARCHITECT_PLANNING:
+                return self._execute_architect_planning()
             if context.current_stage == Stage.PRODUCT_OWNER_DISPATCH:
                 return self._execute_product_owner_stage(stage=Stage.PRODUCT_OWNER_DISPATCH)
             if context.current_stage == Stage.DEVELOPER:
                 return self._execute_developer()
             if context.current_stage == Stage.TESTER:
                 return self._execute_tester()
-            if context.current_stage == Stage.QA:
-                return self._execute_qa()
             if context.current_stage == Stage.HUMAN_GATE:
                 raise RuntimeError(
                     "human_gate must wait for formal approval and cannot advance while running",
@@ -181,6 +192,24 @@ class StageExecutor:
                 stage=stage,
                 unresolved_feedback=unresolved_feedback,
                 current_artifacts=context.current_artifacts,
+            )
+        except ValueError as exc:
+            return self._fail_stage_contract(
+                stage=stage,
+                published_paths=(),
+                message=str(exc),
+            )
+
+        try:
+            plan_snapshot = _require_plan_snapshot(
+                response_text=response_text,
+                source_label=f"{stage.value} response",
+            )
+            self._validate_route_decision_constraints(
+                context=context,
+                stage=stage,
+                decision=decision,
+                plan_snapshot=plan_snapshot,
             )
         except ValueError as exc:
             return self._fail_stage_contract(
@@ -249,28 +278,40 @@ class StageExecutor:
             stage=stage,
             decision=decision,
             published_paths=published_paths,
+            plan_snapshot=plan_snapshot,
         )
 
-    def _execute_project_manager_research(self) -> StageOutcome:
+    def _execute_architect_planning(self) -> StageOutcome:
         role, invocation_result, response_text = self._invoke_role_stage(
-            stage=Stage.PROJECT_MANAGER_RESEARCH,
+            stage=Stage.ARCHITECT_PLANNING,
         )
+        try:
+            _require_plan_snapshot(
+                response_text=response_text,
+                source_label="architect response",
+            )
+        except ValueError as exc:
+            return self._fail_stage_contract(
+                stage=Stage.ARCHITECT_PLANNING,
+                published_paths=(),
+                message=str(exc),
+            )
         published_paths = self._publish_role_stage_success(
-            stage=Stage.PROJECT_MANAGER_RESEARCH,
+            stage=Stage.ARCHITECT_PLANNING,
             role=role,
             invocation_result=invocation_result,
             response_text=response_text,
             artifact_plans=(
                 _ArtifactPlan(
-                    artifact_type=constants.ARTIFACT_RESEARCH_BRIEF,
-                    producer=constants.ROLE_PROJECT_MANAGER,
+                    artifact_type=constants.ARTIFACT_PLAN,
+                    producer=constants.ROLE_ARCHITECT,
                     consumer=constants.ROLE_PRODUCT_OWNER,
                     status="final",
-                    title="Research Brief",
+                    title="Plan",
                 ),
             ),
         )
-        next_stage = fixed_next_stage(Stage.PROJECT_MANAGER_RESEARCH)
+        next_stage = fixed_next_stage(Stage.ARCHITECT_PLANNING)
         assert next_stage is not None
         self.task_store.update_runtime_state(
             stage=next_stage,
@@ -278,10 +319,10 @@ class StageExecutor:
             status=TaskStatus.RUNNING,
         )
         return self._outcome(
-            stage_executed=Stage.PROJECT_MANAGER_RESEARCH,
+            stage_executed=Stage.ARCHITECT_PLANNING,
             next_stage=next_stage,
             published_artifacts=published_paths,
-            message="research completed",
+            message="planning completed",
         )
 
     def _execute_developer(self) -> StageOutcome:
@@ -351,39 +392,6 @@ class StageExecutor:
             message="tester completed",
         )
 
-    def _execute_qa(self) -> StageOutcome:
-        role, invocation_result, response_text = self._invoke_role_stage(
-            stage=Stage.QA,
-        )
-        published_paths = self._publish_role_stage_success(
-            stage=Stage.QA,
-            role=role,
-            invocation_result=invocation_result,
-            response_text=response_text,
-            artifact_plans=(
-                _ArtifactPlan(
-                    artifact_type=constants.ARTIFACT_QA_RESULT,
-                    producer=constants.ROLE_QA,
-                    consumer=constants.ROLE_PRODUCT_OWNER,
-                    status="final",
-                    title="QA Result",
-                ),
-            ),
-        )
-
-        next_stage = Stage.PRODUCT_OWNER_DISPATCH
-        self.task_store.update_runtime_state(
-            stage=next_stage,
-            current_owner=owner_for_stage(next_stage),
-            status=TaskStatus.RUNNING,
-        )
-        return self._outcome(
-            stage_executed=Stage.QA,
-            next_stage=next_stage,
-            published_artifacts=published_paths,
-            message="qa completed",
-        )
-
     def _invoke_role_stage(
         self,
         *,
@@ -440,6 +448,10 @@ class StageExecutor:
         context = self.task_store.load_task_context()
         input_artifacts: tuple[str, ...] | None = None
         extra_context: dict[str, str] = {}
+        include_all_current_artifacts = False
+
+        if stage == Stage.ARCHITECT_PLANNING:
+            include_all_current_artifacts = True
 
         if stage == Stage.DEVELOPER:
             input_artifacts, extra_context = self._developer_input_artifacts(context=context)
@@ -453,6 +465,7 @@ class StageExecutor:
             ),
             input_artifacts=input_artifacts,
             extra_context=extra_context,
+            include_all_current_artifacts=include_all_current_artifacts,
         )
 
     def _developer_input_artifacts(
@@ -461,8 +474,7 @@ class StageExecutor:
         context: TaskContext,
     ) -> tuple[tuple[str, ...], dict[str, str]]:
         references = [
-            constants.ARTIFACT_REQUIREMENT_SPEC,
-            constants.ARTIFACT_EXECUTION_PLAN,
+            constants.ARTIFACT_PLAN,
             constants.ARTIFACT_DEV_HANDOFF,
         ]
         selected_context_artifacts, extra_context = self._developer_context_artifacts(context=context)
@@ -496,6 +508,80 @@ class StageExecutor:
         if warning is not None:
             extra_context["context_artifacts_warning"] = warning
         return parsed_context_artifacts, extra_context
+
+    def _validate_route_decision_constraints(
+        self,
+        *,
+        context: TaskContext,
+        stage: Stage,
+        decision: RouteDecision,
+        plan_snapshot: PlanSnapshot,
+    ) -> None:
+        if decision.task_status != TaskStatus.RUNNING:
+            if decision.review_kind_requested is not None:
+                raise ValueError("review_kind_requested must be `-` when task_status is terminated.")
+            return
+
+        if decision.next_stage != Stage.HUMAN_GATE and decision.review_kind_requested is not None:
+            raise ValueError("review_kind_requested must be `-` unless next_stage is human_gate.")
+
+        if stage != Stage.PRODUCT_OWNER_DISPATCH or decision.next_stage is None:
+            return
+
+        if decision.next_stage in {Stage.DEVELOPER, Stage.TESTER}:
+            if plan_snapshot.human_confirmation_required and not self._has_approved_plan_review(
+                plan_revision=plan_snapshot.plan_revision,
+            ):
+                raise ValueError(
+                    "current plan requires human confirmation before routing to developer or tester.",
+                )
+
+        if decision.next_stage == Stage.HUMAN_GATE:
+            if decision.review_kind_requested == ReviewKind.PLAN:
+                if not plan_snapshot.human_confirmation_required:
+                    raise ValueError(
+                        "cannot request plan review when human_confirmation_required is `no` in plan.",
+                    )
+                if not plan_snapshot.human_confirmation_items:
+                    raise ValueError(
+                        "plan review requires non-empty human_confirmation_items in plan.",
+                    )
+                return
+            if decision.review_kind_requested == ReviewKind.DELIVERY:
+                for required_artifact in (
+                    constants.ARTIFACT_IMPLEMENTATION_RESULT,
+                    constants.ARTIFACT_TEST_REPORT,
+                ):
+                    if required_artifact not in context.current_artifacts:
+                        raise ValueError(
+                            f"delivery review requires current artifact: {required_artifact}.",
+                        )
+                return
+            raise ValueError("human_gate route requires review_kind_requested to be `plan` or `delivery`.")
+
+        if decision.next_stage == Stage.CLOSEOUT and not self._has_approved_delivery_review():
+            raise ValueError(
+                "closeout requires the latest current review_decision to be approved for delivery.",
+            )
+
+    def _has_approved_plan_review(self, *, plan_revision: str) -> bool:
+        review_decision = read_current_review_decision(artifact_store=self.artifact_store)
+        if review_decision is None:
+            return False
+        return (
+            review_decision.review_kind == ReviewKind.PLAN
+            and review_decision.plan_revision == plan_revision
+            and review_decision.decision == constants.REVIEW_DECISION_APPROVED
+        )
+
+    def _has_approved_delivery_review(self) -> bool:
+        review_decision = read_current_review_decision(artifact_store=self.artifact_store)
+        if review_decision is None:
+            return False
+        return (
+            review_decision.review_kind == ReviewKind.DELIVERY
+            and review_decision.decision == constants.REVIEW_DECISION_APPROVED
+        )
 
     def _publish_role_stage_success(
         self,
@@ -571,7 +657,8 @@ class StageExecutor:
             result=decision.task_status.value,
             notes=(
                 f"next_stage={next_stage}; "
-                f"human_advice_disposition={decision.human_advice_disposition.value}"
+                f"human_advice_disposition={decision.human_advice_disposition.value}; "
+                f"review_kind_requested={decision.review_kind_requested.value if decision.review_kind_requested is not None else '-'}"
             ),
         )
 
@@ -606,8 +693,6 @@ class StageExecutor:
             reasons.append(constants.ARTIFACT_REPAIR_TICKET)
         if constants.ARTIFACT_TEST_REPORT in decision.based_on_artifacts:
             reasons.append(constants.ARTIFACT_TEST_REPORT)
-        if constants.ARTIFACT_QA_RESULT in decision.based_on_artifacts:
-            reasons.append(constants.ARTIFACT_QA_RESULT)
 
         if not reasons:
             return None
@@ -658,6 +743,7 @@ class StageExecutor:
         stage: Stage,
         decision: RouteDecision,
         published_paths: tuple[str, ...],
+        plan_snapshot: PlanSnapshot,
     ) -> StageOutcome:
         if decision.task_status == TaskStatus.RUNNING:
             assert decision.next_stage is not None
@@ -667,20 +753,37 @@ class StageExecutor:
                     current_owner=owner_for_stage(Stage.HUMAN_GATE),
                     status=TaskStatus.WAITING_APPROVAL,
                 )
-                review_summary = "Product Owner requested human review on the current proposal."
-                proposal_body = self._review_request_proposal_body(published_paths)
+                assert decision.review_kind_requested is not None
+                review_kind = decision.review_kind_requested
+                if review_kind == ReviewKind.PLAN:
+                    review_summary = "Product Owner requested human confirmation on the current plan revision."
+                    proposal_body = self._plan_review_request_proposal_body()
+                    focus_items = plan_snapshot.human_confirmation_items
+                    plan_revision = plan_snapshot.plan_revision
+                else:
+                    review_summary = "Product Owner requested human review on the current delivery proposal."
+                    proposal_body = self._delivery_review_request_proposal_body(published_paths)
+                    focus_items = ()
+                    plan_revision = None
                 review_request_id = publish_review_request(
                     task_store=self.task_store,
                     artifact_store=self.artifact_store,
                     summary=review_summary,
                     proposal_body=proposal_body,
+                    review_kind=review_kind,
+                    plan_revision=plan_revision,
+                    focus_items=focus_items,
                 )
                 self.task_store.append_event(
                     actor=constants.ROLE_ORCHESTRATOR,
                     action="human_gate_awaiting_approval",
                     input_artifacts=published_paths,
                     result="waiting_approval",
-                    notes=f"review_request_id={review_request_id}",
+                    notes=(
+                        f"review_request_id={review_request_id}; "
+                        f"review_kind={review_kind.value}; "
+                        f"plan_revision={plan_revision or '-'}"
+                    ),
                 )
                 return self._outcome(
                     stage_executed=stage,
@@ -726,20 +829,20 @@ class StageExecutor:
                 "## Ticket Meta",
                 "",
                 f"- raised_by_role: {role}",
-                f"- source_stage: {Stage.QA.value}",
+                f"- source_stage: {Stage.TESTER.value}",
                 f"- repair_loop_attempt: {repair_loop_count + 1}",
                 f"- max_repair_loops: {self.max_repair_loops}",
                 "",
                 "## Problem Statement",
                 "",
-                response_text.strip() or "- empty qa response",
+                response_text.strip() or "- empty tester response",
                 "",
             ],
         )
         publication = self.artifact_store.publish_artifact(
             artifact_type=constants.ARTIFACT_REPAIR_TICKET,
             body=body,
-            stage=Stage.QA,
+            stage=Stage.TESTER,
             producer=role,
             consumer=constants.ROLE_PRODUCT_OWNER,
             status="needs_repair",
@@ -864,7 +967,9 @@ class StageExecutor:
         if decision.task_status == TaskStatus.TERMINATED or decision.next_stage is None:
             return "No further automatic steps."
         if decision.next_stage == Stage.HUMAN_GATE:
-            return "Await formal human review for the latest proposal."
+            if decision.review_kind_requested == ReviewKind.PLAN:
+                return "Await formal human confirmation for the current plan revision."
+            return "Await formal human review for the current delivery proposal."
         return f"Route the task to {decision.next_stage.value}."
 
     def _compose_progress_user_summary(
@@ -954,12 +1059,19 @@ class StageExecutor:
         )
 
 
-    def _review_request_proposal_body(self, published_paths: tuple[str, ...]) -> str:
+    def _delivery_review_request_proposal_body(self, published_paths: tuple[str, ...]) -> str:
         route_decision_path = _artifact_path_for_type(published_paths, constants.ARTIFACT_ROUTE_DECISION)
         if route_decision_path is not None:
             document = self.artifact_store.read_current_artifact(constants.ARTIFACT_ROUTE_DECISION)
             return document.body.strip() or "-"
         return "Review the latest proposal and decide whether it is acceptable."
+
+    def _plan_review_request_proposal_body(self) -> str:
+        try:
+            document = self.artifact_store.read_current_artifact(constants.ARTIFACT_PLAN)
+        except Exception:
+            return "Review the latest plan revision and decide whether the pending confirmation items are acceptable."
+        return document.body.strip() or "-"
 
 
 def _artifact_plans_for_product_owner_stage(
@@ -968,26 +1080,19 @@ def _artifact_plans_for_product_owner_stage(
     decision: RouteDecision,
 ) -> tuple[_ArtifactPlan, ...]:
     if stage == Stage.PRODUCT_OWNER_REFINEMENT:
-        requirement_consumer = (
-            constants.ROLE_PROJECT_MANAGER
+        plan_consumer = (
+            constants.ROLE_ARCHITECT
             if decision.task_status == TaskStatus.RUNNING
-            and decision.next_stage == Stage.PROJECT_MANAGER_RESEARCH
+            and decision.next_stage == Stage.ARCHITECT_PLANNING
             else constants.ROLE_PRODUCT_OWNER
         )
         return (
             _ArtifactPlan(
-                artifact_type=constants.ARTIFACT_REQUIREMENT_SPEC,
+                artifact_type=constants.ARTIFACT_PLAN,
                 producer=constants.ROLE_PRODUCT_OWNER,
-                consumer=requirement_consumer,
+                consumer=plan_consumer,
                 status="draft",
-                title="Requirement Specification",
-            ),
-            _ArtifactPlan(
-                artifact_type=constants.ARTIFACT_EXECUTION_PLAN,
-                producer=constants.ROLE_PRODUCT_OWNER,
-                consumer=constants.ROLE_PRODUCT_OWNER,
-                status="draft",
-                title="Execution Plan",
+                title="Plan",
             ),
             _ArtifactPlan(
                 artifact_type=constants.ARTIFACT_ROUTE_DECISION,
@@ -1000,16 +1105,16 @@ def _artifact_plans_for_product_owner_stage(
     if stage == Stage.PRODUCT_OWNER_DISPATCH:
         plans: list[_ArtifactPlan] = [
             _ArtifactPlan(
-                artifact_type=constants.ARTIFACT_EXECUTION_PLAN,
+                artifact_type=constants.ARTIFACT_PLAN,
                 producer=constants.ROLE_PRODUCT_OWNER,
                 consumer=(
                     owner_for_stage(decision.next_stage)
                     if decision.task_status == TaskStatus.RUNNING
-                    and decision.next_stage in {Stage.DEVELOPER, Stage.TESTER, Stage.QA}
+                    and decision.next_stage in {Stage.ARCHITECT_PLANNING, Stage.DEVELOPER, Stage.TESTER}
                     else constants.ROLE_PRODUCT_OWNER
                 ),
                 status="ready",
-                title="Execution Plan",
+                title="Plan",
             ),
         ]
         if decision.task_status == TaskStatus.RUNNING and decision.next_stage == Stage.DEVELOPER:
@@ -1080,41 +1185,34 @@ def _stage_objective(
 ) -> str:
     if stage == Stage.PRODUCT_OWNER_REFINEMENT:
         objective = (
-            "Refine the requirement baseline, refresh the user-facing progress summary, and emit both "
-            "the latest requirement specification and a route_decision. Your response must include "
-            "bullet fields `- next_stage`, `- task_status`, `- based_on_artifacts`, and "
-            "`- human_advice_disposition`. It must also include progress bullets `- latest_update`, "
+            "Refine the current plan baseline, refresh the user-facing progress summary, and emit "
+            "both the latest plan and a route_decision. Your response must include bullet fields "
+            "`- next_stage`, `- task_status`, `- based_on_artifacts`, `- human_advice_disposition`, "
+            "and `- review_kind_requested`. It must also include progress bullets `- latest_update`, "
             "`- current_focus`, `- next_step`, `- risks`, `- needs_human_review`, and "
             "`- user_summary`. At this stage, running next_stage must be either "
-            "`project_manager_research` or `product_owner_dispatch`, and task_status must be "
+            "`architect_planning` or `product_owner_dispatch`, and task_status must be "
             "`running` or `terminated`."
         )
     elif stage == Stage.PRODUCT_OWNER_DISPATCH:
         objective = (
-            "Refresh the current execution plan, emit any necessary handoff artifacts, refresh the "
-            "user-facing progress summary, and emit a route_decision. Your response must include "
-            "bullet fields `- next_stage`, `- task_status`, `- based_on_artifacts`, and "
-            "`- human_advice_disposition`. It must also include progress bullets `- latest_update`, "
+            "Refresh the current plan, emit any necessary handoff artifacts, refresh the user-facing "
+            "progress summary, and emit a route_decision. Your response must include bullet fields "
+            "`- next_stage`, `- task_status`, `- based_on_artifacts`, `- human_advice_disposition`, "
+            "and `- review_kind_requested`. It must also include progress bullets `- latest_update`, "
             "`- current_focus`, `- next_step`, `- risks`, `- needs_human_review`, and "
             "`- user_summary`. At this stage, running next_stage must be one of "
-            "`project_manager_research`, `developer`, `tester`, `qa`, `human_gate`, or `closeout`, "
-            "and task_status must be `running` or `terminated`."
+            "`architect_planning`, `developer`, `tester`, `human_gate`, or `closeout`, and "
+            "task_status must be `running` or `terminated`."
         )
-    elif stage == Stage.PROJECT_MANAGER_RESEARCH:
-        objective = (
-            "Produce a research brief based on the latest requirement specification for Product Owner."
-        )
+    elif stage == Stage.ARCHITECT_PLANNING:
+        objective = "Update the current plan for Product Owner based on the latest task context."
     elif stage == Stage.DEVELOPER:
-        objective = "Implement the dispatched requirement in the target repository."
+        objective = "Implement the dispatched plan subtask in the target repository."
     elif stage == Stage.TESTER:
         objective = (
             "Validate implementation and produce a test report with explicit bullet field "
             "`- decision: passed|failed`."
-        )
-    elif stage == Stage.QA:
-        objective = (
-            "Audit requirement and test evidence, then issue a QA result with explicit bullet field "
-            "`- decision: approved|rejected`."
         )
     else:  # pragma: no cover - guarded by StageExecutor dispatch
         raise ValueError(f"unsupported stage objective: {stage.value}")
@@ -1160,6 +1258,10 @@ def _parse_route_decision(
         response_text,
         "human_advice_disposition",
     )
+    review_kind_requested_raw = _extract_required_bullet_field(
+        response_text,
+        "review_kind_requested",
+    )
 
     task_status = _parse_route_task_status(task_status_raw)
     based_on_artifacts = _parse_based_on_artifacts(
@@ -1198,11 +1300,18 @@ def _parse_route_decision(
             raise ValueError("next_stage must be `-` when task_status is terminated.")
         next_stage = None
 
+    review_kind_requested = _parse_review_kind_requested(
+        review_kind_requested_raw,
+        next_stage=next_stage,
+        task_status=task_status,
+    )
+
     return RouteDecision(
         next_stage=next_stage,
         task_status=task_status,
         based_on_artifacts=based_on_artifacts,
         human_advice_disposition=feedback_disposition,
+        review_kind_requested=review_kind_requested,
     )
 
 
@@ -1342,6 +1451,107 @@ def _parse_human_advice_disposition(raw_value: str) -> HumanAdviceDisposition:
         ) from exc
 
 
+def _parse_review_kind_requested(
+    raw_value: str,
+    *,
+    next_stage: Stage | None,
+    task_status: TaskStatus,
+) -> ReviewKind | None:
+    normalized = raw_value.strip().lower().replace("-", "_").replace(" ", "_")
+    if task_status == TaskStatus.TERMINATED:
+        if normalized != "-":
+            raise ValueError("review_kind_requested must be `-` when task_status is terminated.")
+        return None
+    if next_stage != Stage.HUMAN_GATE:
+        if normalized != "-":
+            raise ValueError("review_kind_requested must be `-` unless next_stage is human_gate.")
+        return None
+    if normalized == ReviewKind.PLAN.value:
+        return ReviewKind.PLAN
+    if normalized == ReviewKind.DELIVERY.value:
+        return ReviewKind.DELIVERY
+    allowed = ", ".join(constants.REVIEW_KIND_NAMES)
+    raise ValueError(
+        f"review_kind_requested must be one of: {allowed} when next_stage is human_gate; got {raw_value!r}.",
+    )
+
+
+def _parse_plan_snapshot(*, response_text: str, source_label: str) -> PlanSnapshot | None:
+    plan_revision = _extract_optional_bullet_field(response_text, "plan_revision")
+    human_confirmation_required = _extract_optional_bullet_field(
+        response_text,
+        "human_confirmation_required",
+    )
+    human_confirmation_items = _extract_optional_bullet_field(
+        response_text,
+        "human_confirmation_items",
+    )
+    active_subtask_id = _extract_optional_bullet_field(response_text, "active_subtask_id")
+
+    has_any_plan_fields = any(
+        value is not None
+        for value in (
+            plan_revision,
+            human_confirmation_required,
+            human_confirmation_items,
+            active_subtask_id,
+        )
+    )
+    if not has_any_plan_fields:
+        return None
+    if plan_revision is None:
+        raise ValueError(f"{source_label} must include `- plan_revision: ...`.")
+    if human_confirmation_required is None:
+        raise ValueError(f"{source_label} must include `- human_confirmation_required: yes|no`.")
+    if human_confirmation_items is None:
+        raise ValueError(f"{source_label} must include `- human_confirmation_items: ...`.")
+
+    requires_confirmation = _parse_optional_yes_no(
+        human_confirmation_required,
+        default=False,
+        field_name="human_confirmation_required",
+    )
+    confirmation_items = _parse_pipe_or_dash_list(
+        human_confirmation_items,
+        field_name="human_confirmation_items",
+    )
+    if requires_confirmation and not confirmation_items:
+        raise ValueError("human_confirmation_items must be non-empty when human_confirmation_required is `yes`.")
+    if not requires_confirmation and confirmation_items:
+        raise ValueError("human_confirmation_items must be `-` when human_confirmation_required is `no`.")
+
+    normalized_active_subtask = None
+    if active_subtask_id is not None:
+        normalized_active_subtask = active_subtask_id.strip()
+        if normalized_active_subtask == "-":
+            normalized_active_subtask = None
+
+    return PlanSnapshot(
+        plan_revision=plan_revision.strip(),
+        human_confirmation_required=requires_confirmation,
+        human_confirmation_items=confirmation_items,
+        active_subtask_id=normalized_active_subtask,
+    )
+
+
+def _require_plan_snapshot(*, response_text: str, source_label: str) -> PlanSnapshot:
+    snapshot = _parse_plan_snapshot(response_text=response_text, source_label=source_label)
+    if snapshot is None:
+        raise ValueError(f"{source_label} must include plan metadata fields for the formal `plan` artifact.")
+    return snapshot
+
+
+def _parse_pipe_or_dash_list(raw_value: str, *, field_name: str) -> tuple[str, ...]:
+    normalized = raw_value.strip()
+    if normalized == "-":
+        return ()
+    parts = [part.strip() for part in normalized.split("|")]
+    parsed = tuple(part for part in parts if part)
+    if not parsed:
+        raise ValueError(f"{field_name} must not be empty.")
+    return parsed
+
+
 def _parse_context_artifact_list(
     raw_value: str,
     *,
@@ -1352,8 +1562,7 @@ def _parse_context_artifact_list(
         return ()
 
     disallowed_baseline = {
-        constants.ARTIFACT_REQUIREMENT_SPEC,
-        constants.ARTIFACT_EXECUTION_PLAN,
+        constants.ARTIFACT_PLAN,
         constants.ARTIFACT_DEV_HANDOFF,
     }
     parsed: list[str] = []

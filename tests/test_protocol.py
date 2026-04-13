@@ -6,22 +6,26 @@ from xclaw import protocol
 
 
 class ProtocolTest(unittest.TestCase):
-    def test_exports_new_status_and_review_values(self) -> None:
-        self.assertEqual(protocol.TaskStatus.RUNNING.value, protocol.TASK_STATUS_RUNNING)
+    def test_exports_plan_review_constants(self) -> None:
         self.assertEqual(protocol.TaskStatus.WAITING_APPROVAL.value, protocol.TASK_STATUS_WAITING_APPROVAL)
-        self.assertNotIn("waiting_human_feedback", protocol.TASK_STATUS_NAMES)
         self.assertEqual(protocol.ReviewDecision.APPROVED.value, protocol.REVIEW_DECISION_APPROVED)
-        self.assertEqual(protocol.REVIEW_DECISION_NAMES, ("approved", "rejected"))
+        self.assertEqual(protocol.ReviewKind.PLAN.value, protocol.REVIEW_KIND_PLAN)
+        self.assertEqual(protocol.ReviewKind.DELIVERY.value, protocol.REVIEW_KIND_DELIVERY)
 
-    def test_artifact_sets_match_simplified_supervision_model(self) -> None:
-        self.assertIn(protocol.ARTIFACT_PROGRESS, protocol.ARTIFACT_TYPES)
-        self.assertIn(protocol.ARTIFACT_HUMAN_ADVICE_LOG, protocol.ARTIFACT_TYPES)
-        self.assertIn(protocol.ARTIFACT_REVIEW_REQUEST, protocol.ARTIFACT_TYPES)
-        self.assertIn(protocol.ARTIFACT_REVIEW_DECISION, protocol.ARTIFACT_TYPES)
-        self.assertNotIn("conversation", protocol.ARTIFACT_TYPES)
-        self.assertNotIn("human_input", protocol.ARTIFACT_TYPES)
-        self.assertNotIn("human_feedback", protocol.ARTIFACT_TYPES)
-        self.assertNotIn("approval", protocol.ARTIFACT_TYPES)
+    def test_role_stage_and_artifact_sets_match_architect_plan_flow(self) -> None:
+        self.assertIn(protocol.ROLE_ARCHITECT, protocol.ROLE_NAMES)
+        self.assertNotIn("project_manager", protocol.ROLE_NAMES)
+        self.assertNotIn("qa", protocol.ROLE_NAMES)
+
+        self.assertIn(protocol.ARTIFACT_PLAN, protocol.ARTIFACT_TYPES)
+        self.assertNotIn("requirement_spec", protocol.ARTIFACT_TYPES)
+        self.assertNotIn("execution_plan", protocol.ARTIFACT_TYPES)
+        self.assertNotIn("research_brief", protocol.ARTIFACT_TYPES)
+        self.assertNotIn("qa_result", protocol.ARTIFACT_TYPES)
+
+        self.assertEqual(protocol.Stage.ARCHITECT_PLANNING.value, "architect_planning")
+        self.assertNotIn("project_manager_research", [stage.value for stage in protocol.Stage])
+        self.assertNotIn("qa", [stage.value for stage in protocol.Stage])
 
 
 if __name__ == "__main__":

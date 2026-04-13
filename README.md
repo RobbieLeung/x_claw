@@ -2,122 +2,57 @@
 
 `xclaw` is a local gateway service for the **`xllm` project**, designed around a **single target repository** and **a single active task**.
 
-`xclaw` is positioned as follows:
+## Positioning
 
-- It is primarily built for `xllm` project workflows
-- It supports only the `codex` CLI as its agent execution backend
-- All code implementation work is executed by `codex`
-- Users submit tasks, inspect progress, provide advice, review results, and can stop tasks when needed
-- The system uses internal roles such as `Product Owner`, `Project Manager`, `Developer`, `Tester`, and `QA`
+- Single target repository
+- Single active task
+- Local `codex` CLI only
+- Human supervision through `status --advise`, `--approve`, and `--reject`
+- Internal roles are `Product Owner`, `Architect`, `Developer`, `Tester`, `Human Gate`, and `Orchestrator`
 - `Product Owner` is the only formal routing owner
-- Only one active task is allowed at a time
 
-For the full design rationale, see `docs/DESIGN.md`.
+For the full design rationale, see [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Highlights
 
 - Minimal command surface: only `start`, `status`, and `stop`
-- Single-task workspace model: each task gets its own `task.md`, `event_log.md`, `current/`, `history/`, and `runs/`
-- Supervision-oriented interaction: humans participate through `status --advise`, `--approve`, and `--reject`
-- Artifact-driven execution: requirements, plans, handoffs, test results, QA, and review all flow through formal artifacts
-- Local agent execution: internal roles run through the local `codex` CLI
-- Observable progress: `progress.md` maintains a user-readable summary and append-only timeline
-  - The summary includes `latest_update`, `current_focus`, `next_step`, `risks`, `needs_human_review`, and `user_summary`
-- Built-in local skills: bundled `skills/` assets help agents improve task clarification, planning, implementation self-checks, and handoff quality; agents can inspect relevant `SKILL.md` files from the local skills directory when useful
-  - These skills are workflow assets rather than reference notes: they provide process guidance, anti-shortcut checks, and completion checklists
-  - Skill consolidation principle: each workflow skill should own one primary decision area, reducing overlap and making role-level selection easier
+- Plan-first execution: the workflow revolves around a single formal `plan.md`
+- Approval on demand: plan confirmation is requested only when the current plan has human decision points
+- Mandatory final delivery review before `closeout`
+- Workspace-first observability: `task.md`, `event_log.md`, `current/`, `history/`, and `runs/`
 
-## Skill Matrix
-
-- `requirement-refinement`: primary for `Product Owner` / `Project Manager`; helps turn vague tasks into clear requirements and acceptance criteria
-- `execution-planning`: primary for `Product Owner`; breaks requirements into steps, handoffs, dependencies, and completion markers
-- `incremental-delivery`: primary for `Developer`; keeps implementation thin, verification-aware, and step-scoped; secondary for `Tester`
-- `debugging-and-recovery`: primary for `Developer` / `Tester`; isolates failures and produces actionable recovery guidance
-- `code-review-handoff`: primary for `Developer`; summarizes changes, impact, risks, and review focus for downstream roles
-- `quality-review`: primary for `QA`; judges requirement fit, test sufficiency, residual risk, and delivery readiness
-- `xllm-repo-learning`: domain-specific repository understanding skill for xLLM architecture and code navigation
-
-## Design Principles
-
-`xclaw` follows a few explicit constraints:
-
-- Single target repository
-- Single active task
-- No human involvement in the fine-grained runtime state machine
-- `waiting_approval` is the only formal human waiting state
-- `Product Owner` absorbs human advice and decides formal routing at route boundaries
-
-The internal stage flow is:
+## Internal Flow
 
 ```text
 intake
 -> product_owner_refinement
--> [project_manager_research, optional]
+-> [architect_planning, optional]
 -> product_owner_dispatch
--> [developer | tester | qa | human_gate | closeout]
+-> [developer | tester | human_gate | closeout]
 ```
 
-## Requirements
+Human review uses one `waiting_approval` state, and `review_kind` distinguishes:
 
-- Python `>=3.10`
-- A locally available `codex` CLI
-- No support for agent backends other than `codex` CLI
-- Optional: `git`, used to collect target repository context
-
-## Installation
-
-From the project root:
-
-```bash
-pip install -e .
-```
-
-Install development dependencies:
-
-```bash
-pip install -e .[dev]
-```
-
-Then verify the CLI is available:
-
-```bash
-xclaw --version
-```
+- `plan`: confirm pending business/product decisions in the current `plan_revision`
+- `delivery`: final human acceptance of the delivery
 
 ## Quick Start
 
-### 1. Start a task
+### Start a task
 
 ```bash
 xclaw start \
   --repo /path/to/target-repo \
-  --task "Add a README and a minimal usage guide"
+  --task "Implement xxx and add the necessary tests"
 ```
 
-Optionally specify a task ID and workspace root:
-
-```bash
-xclaw start \
-  --repo /path/to/target-repo \
-  --task "Fix the login flow" \
-  --task-id task-login-fix \
-  --workspace-root ./workspace
-```
-
-The command prints:
-
-- `task_id`
-- `task_workspace_path`
-- `worker_pid`
-- `progress_path`
-
-### 2. Check status
+### Check status
 
 ```bash
 xclaw status
 ```
 
-`status` prints a minimal supervision view:
+Default status output includes:
 
 - `active_task_id`
 - `task_status`
@@ -125,194 +60,79 @@ xclaw status
 - `latest_update`
 - `next_step`
 - `needs_human_review`
-- `risks` when a concrete risk is present
-- `pending_advice_count` when there is pending human advice
-- `latest_review_request_id` while waiting for human review
+- `review_kind` while waiting for approval
+- `plan_confirmation_summary` while waiting on a plan review
+- `risks` when present
+- `pending_advice_count` when present
+- `latest_review_request_id` while waiting for approval
 
-If there is no active task, `status` returns an `idle` view.
-
-Detailed paths and internal runtime fields are intentionally omitted from the default view; inspect the task workspace, `gateway.log`, `runs/`, and `current/*.md` directly when needed.
-
-### 3. Provide mid-task advice
+### Provide advice
 
 ```bash
-xclaw status --advise "Narrow the scope and focus on the CLI only"
+xclaw status --advise "Keep the scope narrow and focus on the CLI path first"
 ```
 
-Notes:
+Advice is appended to `human_advice_log` and absorbed by `Product Owner` at the next formal routing boundary.
 
-- Advice is appended to `human_advice_log`
-- It does not interrupt the current stage immediately
-- `Product Owner` absorbs pending advice at formal routing boundaries
-
-### 4. Review a human-gate request
-
-Human review is needed only after the flow enters `human_gate`.
-
-Approve:
+### Approve or reject a review
 
 ```bash
-xclaw status --approve --comment "Looks good, proceed to closeout"
+xclaw status --approve --comment "Looks good"
+xclaw status --reject --comment "The current plan changes product scope"
 ```
 
-Reject:
+Both actions route the task back to `product_owner_dispatch`.
 
-```bash
-xclaw status --reject --comment "Test coverage is still missing failure cases"
-```
-
-Notes:
-
-- Both `approve` and `reject` route the task back to `product_owner_dispatch`
-- Human review can happen in multiple rounds
-
-### 5. Stop the task
+### Stop the active task
 
 ```bash
 xclaw stop
 ```
 
-This marks the current active task as `terminated` and attempts to stop the gateway worker.
-
-## CLI Overview
-
-### `xclaw start`
-
-```bash
-xclaw start --repo REPO --task TEXT [--task-id TASK_ID] [--workspace-root PATH]
-```
-
-### `xclaw status`
-
-```bash
-xclaw status [--workspace-root PATH]
-xclaw status --advise TEXT [--workspace-root PATH]
-xclaw status --approve [--comment TEXT] [--workspace-root PATH]
-xclaw status --reject --comment TEXT [--workspace-root PATH]
-```
-
-### `xclaw stop`
-
-```bash
-xclaw stop [--workspace-root PATH]
-```
-
-### Internal command
-
-`gateway-worker` is an internal subcommand and normally should not be called directly.
-
-## Workspace Layout
-
-By default, the workspace root is `workspace/` under the current command invocation directory.
-
-Each task gets its own directory:
-
-```text
-workspace/
-  <task_id>/
-    task.md
-    event_log.md
-    gateway.log
-    current/
-    history/
-    runs/
-```
-
-Where:
-
-- `task.md`: the main task record, including runtime state and current artifact pointers
-- `event_log.md`: the event log
-- `current/`: the currently active formal artifacts
-- `history/`: archived artifact versions
-- `runs/`: per-invocation prompt, response, and run log files
-
 ## Formal Artifacts
 
-### Main flow artifacts
+### Main flow
 
-- `requirement_spec`
-- `execution_plan`
-- `research_brief`
+- `plan`
 - `dev_handoff`
 - `test_handoff`
 - `implementation_result`
 - `test_report`
-- `qa_result`
 - `repair_ticket`
 - `route_decision`
 - `closeout`
 
-### Supervision artifacts
+### Supervision
 
 - `progress`
 - `human_advice_log`
 - `review_request`
 - `review_decision`
 
-Notes:
+`plan.md` is the only formal planning artifact. It carries:
 
-- `progress` keeps a fixed summary plus an append-only timeline
-- `human_advice_log` stores `advice_id`, `submitted_at`, `status`, `source`, and advice body per entry
+- `plan_revision`
+- `human_confirmation_required`
+- `human_confirmation_items`
+- `active_subtask_id`
+- task goals, scope, architecture decisions, test strategy, and subtask breakdown
 
-## Task Status Model
+## Role Prompts
 
-Formal task statuses are:
-
-- `running`
-- `waiting_approval`
-- `completed`
-- `failed`
-- `terminated`
-
-Meaning:
-
-- `running`: the gateway is actively advancing the workflow
-- `waiting_approval`: the workflow is waiting for human review
-- `completed`: the task has finished successfully
-- `failed`: a stage execution failed
-- `terminated`: the task was explicitly stopped
-
-## Role Prompts and Execution
-
-Role prompts are stored in:
+Bundled prompt assets live under:
 
 - `src/xclaw/agents/product_owner.md`
-- `src/xclaw/agents/project_manager.md`
+- `src/xclaw/agents/architect.md`
 - `src/xclaw/agents/developer.md`
 - `src/xclaw/agents/tester.md`
-- `src/xclaw/agents/qa.md`
 
-At runtime, `xclaw` combines:
-
-- the role prompt
-- the current stage objective
-- `task.md`
-- the artifacts required for the stage
-
-into a single agent invocation executed through the local `codex` CLI.
-
-## Development and Testing
+## Development
 
 Run the test suite with:
 
 ```bash
 PYTHONPATH=src python -m unittest discover -s tests -p 'test*.py'
 ```
-
-If `pytest` is installed locally, you can also run:
-
-```bash
-python -m pytest
-```
-
-## Current Limitations
-
-- It is currently aimed at the `xllm` project, not yet a fully generalized multi-repo orchestration framework
-- Only one active task is supported at a time
-- It is single-repository only
-- It currently supports only the local `codex` CLI and no other agent backend
-- In the current workflow, code implementation is executed by `codex`
-- `gateway-worker` is a local background process, not a remote service
 
 ## References
 

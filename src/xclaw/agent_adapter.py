@@ -30,41 +30,29 @@ _SEQUENCE_PREFIX_RE = re.compile(r"^(?P<seq>[0-9]+)_")
 
 _ROLE_PROMPT_FILENAMES: dict[str, str] = {
     constants.ROLE_PRODUCT_OWNER: "product_owner.md",
-    constants.ROLE_PROJECT_MANAGER: "project_manager.md",
+    constants.ROLE_ARCHITECT: "architect.md",
     constants.ROLE_DEVELOPER: "developer.md",
     constants.ROLE_TESTER: "tester.md",
-    constants.ROLE_QA: "qa.md",
 }
 
 _ROLE_RESULT_TYPES: dict[str, AgentResultType] = {
     constants.ROLE_PRODUCT_OWNER: AgentResultType.ROUTE_DECISION_RESULT,
-    constants.ROLE_PROJECT_MANAGER: AgentResultType.RESEARCH_RESULT,
+    constants.ROLE_ARCHITECT: AgentResultType.PLAN_RESULT,
     constants.ROLE_DEVELOPER: AgentResultType.IMPLEMENTATION_RESULT,
     constants.ROLE_TESTER: AgentResultType.TEST_RESULT,
-    constants.ROLE_QA: AgentResultType.QA_RESULT,
 }
 
 _ROLE_REQUIRED_ARTIFACTS: dict[str, tuple[str, ...]] = {
     constants.ROLE_PRODUCT_OWNER: (),
-    constants.ROLE_PROJECT_MANAGER: (
-        constants.ARTIFACT_REQUIREMENT_SPEC,
-    ),
+    constants.ROLE_ARCHITECT: (),
     constants.ROLE_DEVELOPER: (
-        constants.ARTIFACT_REQUIREMENT_SPEC,
-        constants.ARTIFACT_EXECUTION_PLAN,
+        constants.ARTIFACT_PLAN,
         constants.ARTIFACT_DEV_HANDOFF,
     ),
     constants.ROLE_TESTER: (
-        constants.ARTIFACT_REQUIREMENT_SPEC,
-        constants.ARTIFACT_EXECUTION_PLAN,
+        constants.ARTIFACT_PLAN,
         constants.ARTIFACT_TEST_HANDOFF,
         constants.ARTIFACT_IMPLEMENTATION_RESULT,
-    ),
-    constants.ROLE_QA: (
-        constants.ARTIFACT_REQUIREMENT_SPEC,
-        constants.ARTIFACT_EXECUTION_PLAN,
-        constants.ARTIFACT_IMPLEMENTATION_RESULT,
-        constants.ARTIFACT_TEST_REPORT,
     ),
 }
 
