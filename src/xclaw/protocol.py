@@ -61,31 +61,26 @@ WORKSPACE_REQUIRED_FILES: Final[tuple[str, ...]] = (
 )
 
 ROLE_PRODUCT_OWNER: Final = "product_owner"
-ROLE_PROJECT_MANAGER: Final = "project_manager"
+ROLE_ARCHITECT: Final = "architect"
 ROLE_DEVELOPER: Final = "developer"
 ROLE_TESTER: Final = "tester"
-ROLE_QA: Final = "qa"
 ROLE_HUMAN_GATE: Final = "human_gate"
 ROLE_ORCHESTRATOR: Final = "orchestrator"
 
 ROLE_NAMES: Final[tuple[str, ...]] = (
     ROLE_PRODUCT_OWNER,
-    ROLE_PROJECT_MANAGER,
+    ROLE_ARCHITECT,
     ROLE_DEVELOPER,
     ROLE_TESTER,
-    ROLE_QA,
     ROLE_HUMAN_GATE,
     ROLE_ORCHESTRATOR,
 )
 
-ARTIFACT_REQUIREMENT_SPEC: Final = "requirement_spec"
-ARTIFACT_EXECUTION_PLAN: Final = "execution_plan"
-ARTIFACT_RESEARCH_BRIEF: Final = "research_brief"
+ARTIFACT_PLAN: Final = "plan"
 ARTIFACT_DEV_HANDOFF: Final = "dev_handoff"
 ARTIFACT_TEST_HANDOFF: Final = "test_handoff"
 ARTIFACT_IMPLEMENTATION_RESULT: Final = "implementation_result"
 ARTIFACT_TEST_REPORT: Final = "test_report"
-ARTIFACT_QA_RESULT: Final = "qa_result"
 ARTIFACT_REPAIR_TICKET: Final = "repair_ticket"
 ARTIFACT_ROUTE_DECISION: Final = "route_decision"
 ARTIFACT_CLOSEOUT: Final = "closeout"
@@ -95,14 +90,11 @@ ARTIFACT_REVIEW_REQUEST: Final = "review_request"
 ARTIFACT_REVIEW_DECISION: Final = "review_decision"
 
 ARTIFACT_TYPES: Final[tuple[str, ...]] = (
-    ARTIFACT_REQUIREMENT_SPEC,
-    ARTIFACT_EXECUTION_PLAN,
-    ARTIFACT_RESEARCH_BRIEF,
+    ARTIFACT_PLAN,
     ARTIFACT_DEV_HANDOFF,
     ARTIFACT_TEST_HANDOFF,
     ARTIFACT_IMPLEMENTATION_RESULT,
     ARTIFACT_TEST_REPORT,
-    ARTIFACT_QA_RESULT,
     ARTIFACT_REPAIR_TICKET,
     ARTIFACT_ROUTE_DECISION,
     ARTIFACT_CLOSEOUT,
@@ -151,11 +143,23 @@ class ReviewDecision(str, Enum):
     REJECTED = REVIEW_DECISION_REJECTED
 
 
+REVIEW_KIND_PLAN: Final = "plan"
+REVIEW_KIND_DELIVERY: Final = "delivery"
+REVIEW_KIND_NAMES: Final[tuple[str, ...]] = (
+    REVIEW_KIND_PLAN,
+    REVIEW_KIND_DELIVERY,
+)
+
+
+class ReviewKind(str, Enum):
+    PLAN = REVIEW_KIND_PLAN
+    DELIVERY = REVIEW_KIND_DELIVERY
+
+
 class AgentResultType(str, Enum):
-    RESEARCH_RESULT = "research_result"
+    PLAN_RESULT = "plan_result"
     IMPLEMENTATION_RESULT = "implementation_result"
     TEST_RESULT = "test_result"
-    QA_RESULT = "qa_result"
     ROUTE_DECISION_RESULT = "route_decision_result"
 
 
@@ -192,11 +196,10 @@ class StageTransitionError(ValueError):
 class Stage(str, Enum):
     INTAKE = "intake"
     PRODUCT_OWNER_REFINEMENT = "product_owner_refinement"
-    PROJECT_MANAGER_RESEARCH = "project_manager_research"
+    ARCHITECT_PLANNING = "architect_planning"
     PRODUCT_OWNER_DISPATCH = "product_owner_dispatch"
     DEVELOPER = "developer"
     TESTER = "tester"
-    QA = "qa"
     HUMAN_GATE = "human_gate"
     CLOSEOUT = "closeout"
 
@@ -205,11 +208,10 @@ STAGE_DISPLAY_NAMES: Final[MappingProxyType[Stage, str]] = MappingProxyType(
     {
         Stage.INTAKE: "Intake",
         Stage.PRODUCT_OWNER_REFINEMENT: "Product Owner (Requirement Refinement)",
-        Stage.PROJECT_MANAGER_RESEARCH: "Project Manager",
+        Stage.ARCHITECT_PLANNING: "Architect",
         Stage.PRODUCT_OWNER_DISPATCH: "Product Owner (Finalize and Dispatch)",
         Stage.DEVELOPER: "Developer",
         Stage.TESTER: "Tester",
-        Stage.QA: "QA",
         Stage.HUMAN_GATE: "Human Gate",
         Stage.CLOSEOUT: "Closeout",
     }
@@ -219,11 +221,10 @@ STAGE_OWNERS: Final[MappingProxyType[Stage, str]] = MappingProxyType(
     {
         Stage.INTAKE: ROLE_ORCHESTRATOR,
         Stage.PRODUCT_OWNER_REFINEMENT: ROLE_PRODUCT_OWNER,
-        Stage.PROJECT_MANAGER_RESEARCH: ROLE_PROJECT_MANAGER,
+        Stage.ARCHITECT_PLANNING: ROLE_ARCHITECT,
         Stage.PRODUCT_OWNER_DISPATCH: ROLE_PRODUCT_OWNER,
         Stage.DEVELOPER: ROLE_DEVELOPER,
         Stage.TESTER: ROLE_TESTER,
-        Stage.QA: ROLE_QA,
         Stage.HUMAN_GATE: ROLE_HUMAN_GATE,
         Stage.CLOSEOUT: ROLE_ORCHESTRATOR,
     }
@@ -237,14 +238,13 @@ PRODUCT_OWNER_ROUTE_STAGES: Final[tuple[Stage, ...]] = (
 PRODUCT_OWNER_ROUTE_TARGETS: Final[MappingProxyType[Stage, tuple[Stage, ...]]] = MappingProxyType(
     {
         Stage.PRODUCT_OWNER_REFINEMENT: (
-            Stage.PROJECT_MANAGER_RESEARCH,
+            Stage.ARCHITECT_PLANNING,
             Stage.PRODUCT_OWNER_DISPATCH,
         ),
         Stage.PRODUCT_OWNER_DISPATCH: (
-            Stage.PROJECT_MANAGER_RESEARCH,
+            Stage.ARCHITECT_PLANNING,
             Stage.DEVELOPER,
             Stage.TESTER,
-            Stage.QA,
             Stage.HUMAN_GATE,
             Stage.CLOSEOUT,
         ),
@@ -268,7 +268,7 @@ def fixed_next_stage(stage: Stage | str) -> Stage | None:
         raise StageTransitionError(
             "product_owner_refinement requires explicit Product Owner routing decision.",
         )
-    if normalized == Stage.PROJECT_MANAGER_RESEARCH:
+    if normalized == Stage.ARCHITECT_PLANNING:
         return Stage.PRODUCT_OWNER_DISPATCH
     if normalized == Stage.PRODUCT_OWNER_DISPATCH:
         raise StageTransitionError(
@@ -277,8 +277,6 @@ def fixed_next_stage(stage: Stage | str) -> Stage | None:
     if normalized == Stage.DEVELOPER:
         return Stage.PRODUCT_OWNER_DISPATCH
     if normalized == Stage.TESTER:
-        return Stage.PRODUCT_OWNER_DISPATCH
-    if normalized == Stage.QA:
         return Stage.PRODUCT_OWNER_DISPATCH
     if normalized == Stage.HUMAN_GATE:
         return Stage.PRODUCT_OWNER_DISPATCH
@@ -299,17 +297,14 @@ def route_targets_for_stage(stage: Stage | str) -> tuple[Stage, ...]:
 __all__ = [
     "AgentExecutionStatus",
     "AgentResultType",
+    "ARTIFACT_PLAN",
     "ARTIFACT_CLOSEOUT",
     "ARTIFACT_DEV_HANDOFF",
-    "ARTIFACT_EXECUTION_PLAN",
     "ARTIFACT_FILENAMES",
     "ARTIFACT_HUMAN_ADVICE_LOG",
     "ARTIFACT_IMPLEMENTATION_RESULT",
     "ARTIFACT_PROGRESS",
-    "ARTIFACT_QA_RESULT",
     "ARTIFACT_REPAIR_TICKET",
-    "ARTIFACT_REQUIREMENT_SPEC",
-    "ARTIFACT_RESEARCH_BRIEF",
     "ARTIFACT_REVIEW_DECISION",
     "ARTIFACT_REVIEW_REQUEST",
     "ARTIFACT_ROUTE_DECISION",
@@ -336,14 +331,17 @@ __all__ = [
     "HUMAN_ADVICE_DISPOSITION_REJECTED",
     "HumanAdviceDisposition",
     "CURRENT_DIRNAME",
+    "REVIEW_KIND_DELIVERY",
+    "REVIEW_KIND_NAMES",
+    "REVIEW_KIND_PLAN",
     "ROLE_DEVELOPER",
+    "ROLE_ARCHITECT",
     "ROLE_HUMAN_GATE",
     "ROLE_NAMES",
     "ROLE_ORCHESTRATOR",
     "ROLE_PRODUCT_OWNER",
-    "ROLE_PROJECT_MANAGER",
-    "ROLE_QA",
     "ROLE_TESTER",
+    "ReviewKind",
     "RUNS_DIRNAME",
     "PRODUCT_OWNER_ROUTE_STAGES",
     "REVIEW_DECISION_APPROVED",

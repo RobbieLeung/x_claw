@@ -10,7 +10,7 @@ description: Use when handing implementation work to downstream reviewers or tes
 当你遇到以下情况时，可按需使用这个 skill：
 
 - 你已经完成本轮实现，准备输出 `implementation_result`
-- 你需要把改动重点、影响范围和风险点交接给 `Tester` 或 `QA`
+- 你需要把改动重点、影响范围和风险点交接给 `Tester` 或最终人工审阅方
 - 你希望在提交结果前做一次简短自审，避免遗漏明显问题
 - 这轮改动不大，但涉及关键路径、状态切换或易回归区域
 

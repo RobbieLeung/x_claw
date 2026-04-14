@@ -50,7 +50,7 @@ class GatewayTest(unittest.TestCase):
             progress = read_progress_snapshot(artifact_store=artifacts)
             self.assertTrue(progress.needs_human_review)
             self.assertEqual(progress.latest_update, "waiting for human review")
-            self.assertEqual(progress.current_focus, "Waiting for human review on the current proposal.")
+            self.assertEqual(progress.current_focus, "Waiting for human review on the current request.")
 
 
 if __name__ == "__main__":

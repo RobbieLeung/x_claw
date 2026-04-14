@@ -15,6 +15,7 @@ from .gateway import GatewayRunConfig, TaskGateway
 from .human_io import (
     ensure_supervision_artifacts,
     pending_human_advice_count,
+    read_current_review_request,
     read_latest_review_request_id,
     read_progress_snapshot,
     submit_human_advice,
@@ -42,6 +43,8 @@ _STATUS_FIELD_ORDER: tuple[str, ...] = (
     "latest_update",
     "next_step",
     "needs_human_review",
+    "review_kind",
+    "plan_confirmation_summary",
     "risks",
     "pending_advice_count",
     "latest_review_request_id",
@@ -201,6 +204,8 @@ def _idle_status_view() -> dict[str, str]:
         "latest_update": "No active task is running.",
         "next_step": "Run `xclaw start --repo ... --task ...` to begin.",
         "needs_human_review": "no",
+        "review_kind": "-",
+        "plan_confirmation_summary": "-",
         "risks": "-",
         "pending_advice_count": "0",
         "latest_review_request_id": "-",
@@ -210,6 +215,19 @@ def _idle_status_view() -> dict[str, str]:
 def _build_status_view(*, active, task_store: TaskStore, artifact_store: ArtifactStore) -> dict[str, str]:
     context = task_store.load_task_context()
     progress = read_progress_snapshot(artifact_store=artifact_store)
+    review_request = read_current_review_request(artifact_store=artifact_store)
+    review_kind = (
+        review_request.review_kind.value
+        if context.status == TaskStatus.WAITING_APPROVAL and review_request is not None
+        else "-"
+    )
+    plan_confirmation_summary = "-"
+    if (
+        context.status == TaskStatus.WAITING_APPROVAL
+        and review_request is not None
+        and review_request.review_kind.value == constants.REVIEW_KIND_PLAN
+    ):
+        plan_confirmation_summary = " | ".join(review_request.focus_items) if review_request.focus_items else "-"
     return {
         "active_task_id": active.task_id,
         "task_status": context.status.value,
@@ -217,6 +235,8 @@ def _build_status_view(*, active, task_store: TaskStore, artifact_store: Artifac
         "latest_update": progress.latest_update,
         "next_step": progress.next_step,
         "needs_human_review": "yes" if progress.needs_human_review else "no",
+        "review_kind": review_kind,
+        "plan_confirmation_summary": plan_confirmation_summary,
         "risks": progress.risks,
         "pending_advice_count": str(pending_human_advice_count(artifact_store=artifact_store)),
         "latest_review_request_id": read_latest_review_request_id(artifact_store=artifact_store),
@@ -257,6 +277,7 @@ def _run_status_action(
         return (
             ("review_decision_id", result.review_decision_id),
             ("review_decision", result.decision),
+            ("review_kind", result.review_kind),
         )
     if args.reject:
         if not args.comment or not args.comment.strip():
@@ -270,6 +291,7 @@ def _run_status_action(
         return (
             ("review_decision_id", result.review_decision_id),
             ("review_decision", result.decision),
+            ("review_kind", result.review_kind),
         )
     if args.comment:
         raise CliCommandError("`--comment` must be used with `--approve` or `--reject`.")
@@ -286,6 +308,10 @@ def _print_status_view(status_view: dict[str, str]) -> None:
         if field == "risks" and status_view[field] == "-":
             continue
         if field == "pending_advice_count" and status_view[field] in {"0", "-"}:
+            continue
+        if field == "review_kind" and status_view[field] == "-":
+            continue
+        if field == "plan_confirmation_summary" and status_view[field] == "-":
             continue
         if (
             field == "latest_review_request_id"

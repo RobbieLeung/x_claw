@@ -12,7 +12,7 @@ description: Use when a task should be broken into executable steps with clear d
 - 任务复杂、跨模块或一次性落地风险高
 - 需要把工作拆成多个 step 才能稳定推进
 - 需要明确当前 step 的边界、依赖和完成标志
-- 你要写 `execution_plan`、`dev_handoff` 或 `test_handoff`
+- 你要写 `plan`、`dev_handoff` 或 `test_handoff`
 - 你需要判断当前阶段该继续开发、先测试、先调研还是先回流修复
 
 ## 何时不要用
@@ -29,7 +29,7 @@ description: Use when a task should be broken into executable steps with clear d
 2. 每个 step 至少定义目标、范围、非目标、完成标志和验证重点。
 3. 只激活一个当前 step，避免多个 step 并行混在一次交付里。
 4. 明确 step 间依赖、前置条件和回流条件。
-5. 为 `Developer`、`Tester`、`QA` 分别准备不同粒度的交接，不要混成一份含糊说明。
+5. 为 `Developer`、`Tester` 和最终人工确认分别准备合适粒度的信息，不要混成一份含糊说明。
 
 ## 输出要求
 
