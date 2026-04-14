@@ -926,12 +926,13 @@ class StageExecutor:
         response_text: str,
     ) -> str | None:
         snapshot = read_progress_snapshot(artifact_store=self.artifact_store)
-        latest_update = _extract_optional_bullet_field(response_text, "latest_update")
-        current_focus = _extract_optional_bullet_field(response_text, "current_focus")
-        next_step = _extract_optional_bullet_field(response_text, "next_step")
-        risks = _extract_optional_bullet_field(response_text, "risks")
-        user_summary = _extract_optional_bullet_field(response_text, "user_summary")
-        needs_review_raw = _extract_optional_bullet_field(response_text, "needs_human_review")
+        progress_text = _extract_markdown_section(response_text, "Progress") or response_text
+        latest_update = _extract_optional_bullet_field(progress_text, "latest_update")
+        current_focus = _extract_optional_bullet_field(progress_text, "current_focus")
+        next_step = _extract_optional_bullet_field(progress_text, "next_step")
+        risks = _extract_optional_bullet_field(progress_text, "risks")
+        user_summary = _extract_optional_bullet_field(progress_text, "user_summary")
+        needs_review_raw = _extract_optional_bullet_field(progress_text, "needs_human_review")
 
         resolved_latest_update = latest_update or f"Product Owner updated the task plan during {stage.value}."
         resolved_current_focus = current_focus or self._normalize_progress_value(snapshot.current_focus)
@@ -1251,15 +1252,17 @@ def _parse_route_decision(
     unresolved_feedback: bool,
     current_artifacts: dict[str, str],
 ) -> RouteDecision:
-    next_stage_raw = _extract_required_bullet_field(response_text, "next_stage")
-    task_status_raw = _extract_required_bullet_field(response_text, "task_status")
-    based_on_raw = _extract_required_bullet_field(response_text, "based_on_artifacts")
+    route_decision_text = _extract_markdown_section(response_text, "Route Decision") or response_text
+
+    next_stage_raw = _extract_required_bullet_field(route_decision_text, "next_stage")
+    task_status_raw = _extract_required_bullet_field(route_decision_text, "task_status")
+    based_on_raw = _extract_required_bullet_field(route_decision_text, "based_on_artifacts")
     feedback_disposition_raw = _extract_required_bullet_field(
-        response_text,
+        route_decision_text,
         "human_advice_disposition",
     )
     review_kind_requested_raw = _extract_required_bullet_field(
-        response_text,
+        route_decision_text,
         "review_kind_requested",
     )
 
@@ -1342,8 +1345,39 @@ def _extract_optional_bullet_field(response_text: str, field_name: str) -> str |
     return None
 
 
+def _extract_markdown_section(response_text: str, title: str) -> str | None:
+    lines = response_text.splitlines()
+    start_index: int | None = None
+    heading_level: int | None = None
+
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        match = re.match(r"^(#{1,6})\s+(.+?)\s*$", stripped)
+        if match is None:
+            continue
+        if match.group(2).strip() != title:
+            continue
+        start_index = index + 1
+        heading_level = len(match.group(1))
+        break
+
+    if start_index is None or heading_level is None:
+        return None
+
+    collected: list[str] = []
+    for line in lines[start_index:]:
+        stripped = line.strip()
+        match = re.match(r"^(#{1,6})\s+(.+?)\s*$", stripped)
+        if match is not None and len(match.group(1)) <= heading_level:
+            break
+        collected.append(line)
+    return "\n".join(collected).strip("\n")
+
+
 def _extract_developer_context_artifacts_field(response_text: str) -> tuple[str | None, str | None]:
-    raw_value = _extract_optional_bullet_field(response_text, "context_artifacts")
+    developer_handoff_text = _extract_markdown_section(response_text, "Developer Handoff") or response_text
+
+    raw_value = _extract_optional_bullet_field(developer_handoff_text, "context_artifacts")
     if raw_value is not None:
         return raw_value, None
 
@@ -1351,7 +1385,7 @@ def _extract_developer_context_artifacts_field(response_text: str) -> tuple[str 
         r"^-\s*`context_artifacts:\s*(.+?)`\s*$",
         flags=re.IGNORECASE | re.MULTILINE,
     )
-    matches = [match.strip() for match in legacy_pattern.findall(response_text) if match.strip()]
+    matches = [match.strip() for match in legacy_pattern.findall(developer_handoff_text) if match.strip()]
     if len(matches) > 1:
         raise ValueError("context_artifacts must appear at most once.")
     if matches:
@@ -1360,7 +1394,7 @@ def _extract_developer_context_artifacts_field(response_text: str) -> tuple[str 
             "Parsed legacy backtick-wrapped `context_artifacts` directive from dev_handoff.",
         )
 
-    if "context_artifacts" not in response_text:
+    if "context_artifacts" not in developer_handoff_text:
         return None, None
     return (
         None,
@@ -1457,15 +1491,16 @@ def _parse_review_kind_requested(
     next_stage: Stage | None,
     task_status: TaskStatus,
 ) -> ReviewKind | None:
-    normalized = raw_value.strip().lower().replace("-", "_").replace(" ", "_")
+    stripped = raw_value.strip()
     if task_status == TaskStatus.TERMINATED:
-        if normalized != "-":
+        if stripped != "-":
             raise ValueError("review_kind_requested must be `-` when task_status is terminated.")
         return None
     if next_stage != Stage.HUMAN_GATE:
-        if normalized != "-":
+        if stripped != "-":
             raise ValueError("review_kind_requested must be `-` unless next_stage is human_gate.")
         return None
+    normalized = stripped.lower().replace("-", "_").replace(" ", "_")
     if normalized == ReviewKind.PLAN.value:
         return ReviewKind.PLAN
     if normalized == ReviewKind.DELIVERY.value:
@@ -1477,16 +1512,18 @@ def _parse_review_kind_requested(
 
 
 def _parse_plan_snapshot(*, response_text: str, source_label: str) -> PlanSnapshot | None:
-    plan_revision = _extract_optional_bullet_field(response_text, "plan_revision")
+    plan_text = _extract_markdown_section(response_text, "Plan") or response_text
+
+    plan_revision = _extract_optional_bullet_field(plan_text, "plan_revision")
     human_confirmation_required = _extract_optional_bullet_field(
-        response_text,
+        plan_text,
         "human_confirmation_required",
     )
     human_confirmation_items = _extract_optional_bullet_field(
-        response_text,
+        plan_text,
         "human_confirmation_items",
     )
-    active_subtask_id = _extract_optional_bullet_field(response_text, "active_subtask_id")
+    active_subtask_id = _extract_optional_bullet_field(plan_text, "active_subtask_id")
 
     has_any_plan_fields = any(
         value is not None

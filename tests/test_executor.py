@@ -58,6 +58,28 @@ class ExecutorContractTest(unittest.TestCase):
                 current_artifacts={constants.ARTIFACT_PLAN: "current/plan.md"},
             )
 
+    def test_parse_route_decision_allows_dash_review_kind_outside_human_gate(self) -> None:
+        response = """
+- next_stage: architect_planning
+- task_status: running
+- based_on_artifacts: progress
+- human_advice_disposition: none
+- review_kind_requested: -
+""".strip()
+
+        decision = _parse_route_decision(
+            response,
+            stage=Stage.PRODUCT_OWNER_REFINEMENT,
+            unresolved_feedback=False,
+            current_artifacts={constants.ARTIFACT_PROGRESS: "current/progress.md"},
+        )
+
+        self.assertEqual(decision.next_stage, Stage.ARCHITECT_PLANNING)
+        self.assertEqual(decision.task_status, TaskStatus.RUNNING)
+        self.assertEqual(decision.based_on_artifacts, (constants.ARTIFACT_PROGRESS,))
+        self.assertEqual(decision.human_advice_disposition, HumanAdviceDisposition.NONE)
+        self.assertIsNone(decision.review_kind_requested)
+
     def test_require_plan_snapshot_parses_confirmation_contract(self) -> None:
         snapshot = _require_plan_snapshot(
             response_text=(
@@ -73,6 +95,62 @@ class ExecutorContractTest(unittest.TestCase):
         self.assertTrue(snapshot.human_confirmation_required)
         self.assertEqual(snapshot.human_confirmation_items, ("Confirm scope", "Confirm dependency risk"))
         self.assertEqual(snapshot.active_subtask_id, "subtask-002")
+
+    def test_require_plan_snapshot_ignores_duplicate_fields_in_other_sections(self) -> None:
+        snapshot = _require_plan_snapshot(
+            response_text=(
+                "# Plan\n"
+                "- plan_revision: plan-r3\n"
+                "- human_confirmation_required: no\n"
+                "- human_confirmation_items: -\n"
+                "- active_subtask_id: subtask-001\n\n"
+                "# Dev Handoff\n"
+                "- plan_revision: plan-r3\n"
+                "- active_subtask_id: subtask-001\n"
+                "- context_artifacts: progress\n"
+            ),
+            source_label="test response",
+        )
+
+        self.assertEqual(snapshot.plan_revision, "plan-r3")
+        self.assertFalse(snapshot.human_confirmation_required)
+        self.assertEqual(snapshot.human_confirmation_items, ())
+        self.assertEqual(snapshot.active_subtask_id, "subtask-001")
+
+    def test_parse_route_decision_prefers_route_decision_section(self) -> None:
+        response = """
+# Plan
+- plan_revision: plan-r4
+- human_confirmation_required: no
+- human_confirmation_items: -
+- active_subtask_id: subtask-004
+
+# Route Decision
+- next_stage: developer
+- task_status: running
+- based_on_artifacts: plan,progress
+- human_advice_disposition: none
+- review_kind_requested: -
+""".strip()
+
+        decision = _parse_route_decision(
+            response,
+            stage=Stage.PRODUCT_OWNER_DISPATCH,
+            unresolved_feedback=False,
+            current_artifacts={
+                constants.ARTIFACT_PLAN: "current/plan.md",
+                constants.ARTIFACT_PROGRESS: "current/progress.md",
+            },
+        )
+
+        self.assertEqual(decision.next_stage, Stage.DEVELOPER)
+        self.assertEqual(decision.task_status, TaskStatus.RUNNING)
+        self.assertEqual(
+            decision.based_on_artifacts,
+            (constants.ARTIFACT_PLAN, constants.ARTIFACT_PROGRESS),
+        )
+        self.assertEqual(decision.human_advice_disposition, HumanAdviceDisposition.NONE)
+        self.assertIsNone(decision.review_kind_requested)
 
     def test_build_developer_invocation_uses_plan_baseline_and_selected_context(self) -> None:
         result, store, artifacts = self._workspace(task_id="task-developer-context")
@@ -286,6 +364,15 @@ class ExecutorContractTest(unittest.TestCase):
                 "progress, implementation_result",
                 "Parsed legacy backtick-wrapped `context_artifacts` directive from dev_handoff.",
             ),
+        )
+
+    def test_extract_developer_context_artifacts_field_ignores_other_sections(self) -> None:
+        self.assertEqual(
+            _extract_developer_context_artifacts_field(
+                "# Plan\n\n- plan_revision: plan-r3\n\n"
+                "# Developer Handoff\n\n- context_artifacts: progress, implementation_result\n"
+            ),
+            ("progress, implementation_result", None),
         )
 
 

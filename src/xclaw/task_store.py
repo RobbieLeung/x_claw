@@ -216,8 +216,8 @@ class TaskStore:
                     f"event_log.md seq must be integer, got {payload['seq']!r}.",
                 ) from exc
 
-            events.append(
-                TaskEvent(
+            try:
+                event = TaskEvent(
                     seq=seq,
                     timestamp=payload["timestamp"],
                     actor=payload["actor"],
@@ -226,8 +226,12 @@ class TaskStore:
                     output_artifacts=_parse_artifact_cell(payload["output_artifacts"]),
                     result=result,
                     notes=notes,
-                ),
-            )
+                )
+            except (TypeError, ValueError) as exc:
+                raise TaskStoreContractError(
+                    f"event_log.md row {seq} is invalid: {exc}",
+                ) from exc
+            events.append(event)
 
         self._validate_event_sequence(events)
         return tuple(events)
