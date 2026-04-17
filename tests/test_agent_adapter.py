@@ -27,7 +27,7 @@ class _FakeRunner:
 
 
 class AgentAdapterTest(unittest.TestCase):
-    def _workspace(self, *, task_id: str):
+    def _workspace(self, *, task_id: str, **kwargs):
         self.tmp_dir = tempfile.TemporaryDirectory()
         root = Path(self.tmp_dir.name)
         repo = root / "repo"
@@ -37,6 +37,7 @@ class AgentAdapterTest(unittest.TestCase):
             task_description=task_id,
             task_id=task_id,
             workspace_root=root / "workspace",
+            **kwargs,
         )
 
     def tearDown(self) -> None:
@@ -112,6 +113,62 @@ class AgentAdapterTest(unittest.TestCase):
                 self.assertTrue(prompt_path.samefile(expected_agents / "architect.md"))
         finally:
             adapter.close()
+
+    def test_product_owner_prompt_includes_external_bootstrap_plan(self) -> None:
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        root = Path(self.tmp_dir.name)
+        repo = root / "repo"
+        plan = root / "bootstrap-plan.md"
+        repo.mkdir(parents=True, exist_ok=False)
+        plan.write_text("# Imported Plan\n\nBootstrap details\n", encoding="utf-8")
+        result = initialize_task_workspace(
+            target_repo_path=repo,
+            task_description="bootstrap task",
+            task_id="task-po-bootstrap-plan",
+            workspace_root=root / "workspace",
+            initial_stage=Stage.PRODUCT_OWNER_DISPATCH,
+            bootstrap_plan_source_path=plan,
+        )
+
+        executor = StageExecutor(result.task_workspace_path)
+        invocation = executor._build_stage_invocation(stage=Stage.PRODUCT_OWNER_DISPATCH)
+        adapter = AgentAdapter(result.task_workspace_path, runner=_FakeRunner())
+        try:
+            outcome = adapter.invoke(invocation)
+            prompt_text = (Path(result.task_workspace_path) / outcome.prompt_path).read_text(encoding="utf-8")
+        finally:
+            adapter.close()
+
+        self.assertIn("Read only from the attached input documents below.", prompt_text)
+        self.assertIn(f"### {plan.resolve()} ({plan.resolve()})", prompt_text)
+        self.assertIn("Bootstrap details", prompt_text)
+        self.assertIn("bootstrap_plan_source:", prompt_text)
+
+    def test_product_owner_invocation_fails_when_external_bootstrap_plan_missing(self) -> None:
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        root = Path(self.tmp_dir.name)
+        repo = root / "repo"
+        missing_plan = root / "missing-plan.md"
+        repo.mkdir(parents=True, exist_ok=False)
+        result = initialize_task_workspace(
+            target_repo_path=repo,
+            task_description="bootstrap task",
+            task_id="task-po-missing-bootstrap-plan",
+            workspace_root=root / "workspace",
+            initial_stage=Stage.PRODUCT_OWNER_DISPATCH,
+            bootstrap_plan_source_path=missing_plan,
+        )
+
+        executor = StageExecutor(result.task_workspace_path)
+        invocation = executor._build_stage_invocation(stage=Stage.PRODUCT_OWNER_DISPATCH)
+        adapter = AgentAdapter(result.task_workspace_path, runner=_FakeRunner())
+        try:
+            outcome = adapter.invoke(invocation)
+        finally:
+            adapter.close()
+
+        self.assertEqual(outcome.exit_code, 2)
+        self.assertIn(str(missing_plan.resolve()), outcome.missing_input_artifacts)
 
 
 if __name__ == "__main__":

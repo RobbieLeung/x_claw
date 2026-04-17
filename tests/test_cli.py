@@ -239,6 +239,122 @@ class CliTest(unittest.TestCase):
             self.assertEqual(stderr, "")
             self.assertIn("progress_path:", stdout)
 
+    def test_start_accepts_bootstrap_plan_without_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            plan = root / "plan.md"
+            repo.mkdir(parents=True, exist_ok=False)
+            plan.write_text("# Imported Plan\n\nDetails\n", encoding="utf-8")
+            fake_worker = type("Worker", (), {"pid": 321})()
+
+            with mock.patch("xclaw.cli._spawn_gateway_worker", return_value=fake_worker):
+                exit_code, stdout, stderr = _invoke_main(
+                    [
+                        "start",
+                        "--repo",
+                        str(repo),
+                        "--plan",
+                        str(plan),
+                        "--workspace-root",
+                        str(root / "workspace"),
+                        "--task-id",
+                        "task-cli-start-plan",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr, "")
+            self.assertIn("progress_path:", stdout)
+
+            store = TaskStore(root / "workspace" / "task-cli-start-plan")
+            context = store.load_task_context()
+            self.assertEqual(context.current_stage, Stage.PRODUCT_OWNER_DISPATCH)
+            self.assertEqual(context.bootstrap_plan_source_path, str(plan.resolve()))
+            self.assertIn("task=Imported Plan", "\n".join(context.recovery_notes))
+
+    def test_start_uses_explicit_task_over_bootstrap_plan_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            plan = root / "plan.md"
+            repo.mkdir(parents=True, exist_ok=False)
+            plan.write_text("# Imported Plan\n", encoding="utf-8")
+            fake_worker = type("Worker", (), {"pid": 321})()
+
+            with mock.patch("xclaw.cli._spawn_gateway_worker", return_value=fake_worker):
+                exit_code, _, stderr = _invoke_main(
+                    [
+                        "start",
+                        "--repo",
+                        str(repo),
+                        "--plan",
+                        str(plan),
+                        "--task",
+                        "explicit task name",
+                        "--workspace-root",
+                        str(root / "workspace"),
+                        "--task-id",
+                        "task-cli-start-explicit",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr, "")
+            store = TaskStore(root / "workspace" / "task-cli-start-explicit")
+            self.assertIn("task=explicit task name", "\n".join(store.load_task_context().recovery_notes))
+
+    def test_start_requires_task_or_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+
+            exit_code, stdout, stderr = _invoke_main(
+                [
+                    "start",
+                    "--repo",
+                    str(repo),
+                    "--workspace-root",
+                    str(root / "workspace"),
+                ]
+            )
+
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("requires `--task` or `--plan`", stderr)
+
+    def test_start_rejects_invalid_bootstrap_plan_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            empty_plan = root / "empty.md"
+            plan_dir = root / "plan-dir"
+            repo.mkdir(parents=True, exist_ok=False)
+            empty_plan.write_text("\n", encoding="utf-8")
+            plan_dir.mkdir(parents=True, exist_ok=False)
+
+            for plan_arg, expected in (
+                (root / "missing.md", "bootstrap plan does not exist"),
+                (plan_dir, "bootstrap plan must be a file"),
+                (empty_plan, "bootstrap plan must be non-empty"),
+            ):
+                with self.subTest(plan_arg=plan_arg):
+                    exit_code, stdout, stderr = _invoke_main(
+                        [
+                            "start",
+                            "--repo",
+                            str(repo),
+                            "--plan",
+                            str(plan_arg),
+                            "--workspace-root",
+                            str(root / "workspace"),
+                        ]
+                    )
+                    self.assertEqual(exit_code, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(expected, stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

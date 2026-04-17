@@ -52,6 +52,13 @@
 
 其中 `status` 同时承担“查看”和“监督输入”两个职责；`resume` 负责在没有活跃 worker 时，把最近 task 拉回 Product Owner 边界继续推进。
 
+`xclaw start` 支持两种启动入口：
+
+- `--task`：从任务描述启动，按常规 `intake -> product_owner_refinement` 流程进入规划
+- `--plan`：从外部已有 `plan.md` 启动，把该文件作为 bootstrap context，直接进入 `product_owner_dispatch`
+
+其中外部 `--plan` 不是正式计划工件；正式 `current/plan.md` 仍必须由系统内 `Product Owner` 产出。
+
 ### 3.2 建议（advice）
 
 中途建议采用非阻塞模型：
@@ -92,6 +99,16 @@ intake
 -> product_owner_dispatch
 -> [developer | tester | human_gate | closeout]
 ```
+
+当用户通过 `xclaw start --plan ...` 启动时，允许采用以下 bootstrap 入口：
+
+```text
+product_owner_dispatch
+-> [architect_planning, optional]
+-> developer/tester/human_gate/closeout
+```
+
+该入口的含义是“跳过前置收敛阶段，但不跳过正式计划产出”；`Product Owner` 首先要把外部 plan 整理成正式 `current/plan.md`，之后流程再按既有规则推进。
 
 固定回流规则：
 
@@ -209,6 +226,15 @@ intake
 - `review_decision`
   - 用户 approve/reject 后发布
   - 包含 `review_kind`，若为 `plan` 审阅还包含 `plan_revision`
+
+### 5.4 外部 bootstrap plan 约定
+
+- `xclaw start --plan <path>` 传入的文件只作为启动参考输入
+- 该文件不会被复制到 `current/` 或变成正式 artifact type
+- 任务上下文会在 `task.md` 的 `Basic Info` 中记录 `bootstrap_plan_source_path`
+- 当任务处于 bootstrap 阶段且尚未生成正式 `current/plan.md` 时，`Product Owner` 允许读取该外部文件
+- `based_on_artifacts` 仍只能引用正式 `current` artifacts，不能引用外部 bootstrap plan
+- 如果首次 `Product Owner` 派发前该外部文件已经消失，则本轮派发应失败并要求恢复源文件或重新启动任务
 
 ## 6. 关键规则
 

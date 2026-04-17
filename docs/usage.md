@@ -45,10 +45,37 @@ xclaw start \
   --task "实现 xxx，并补充必要测试"
 ```
 
+或者直接从已有计划启动：
+
+```bash
+xclaw start \
+  --repo /abs/path/to/target_repo \
+  --plan ./plan.md
+```
+
+也可以同时显式指定任务描述：
+
+```bash
+xclaw start \
+  --repo /abs/path/to/target_repo \
+  --plan ./plan.md \
+  --task "实现 xxx，并补充必要测试"
+```
+
 可选参数：
 
+- `--plan`
 - `--task-id`
 - `--workspace-root`
+
+说明：
+
+- `--task` 和 `--plan` 至少提供一个
+- `--task` 与 `--plan` 同时提供时，`--task` 作为显式任务描述
+- 仅提供 `--plan` 时，系统会优先取第一个一级标题作为任务描述；没有一级标题时退化为首个非空文本
+- 外部 `--plan` 只作为启动参考输入，不会直接成为正式 `current/plan.md`
+- 使用 `--plan` 启动时，任务会直接从 `product_owner_dispatch` 开始，由 `Product Owner` 先整理出第一版正式 `plan.md`
+- 在第一版正式 `plan.md` 产出前，请不要删除原始 `--plan` 文件；否则首次派发会失败
 
 启动成功后会输出：
 
@@ -193,6 +220,7 @@ workspace/<task_id>/
 其中：
 
 - `plan.md` 是唯一正式计划工件
+- `task.md` 的 `bootstrap_plan_source_path` 会记录启动时传入的外部 `--plan` 路径（若存在）
 - `review_request.md` / `review_decision.md` 会记录 `review_kind`
 - `plan` 审阅还会记录对应的 `plan_revision`
 

@@ -646,7 +646,7 @@ class AgentAdapter:
             "",
             "## Execution Contract",
             "",
-            "- Read only from `task.md` and `current/*.md` inputs attached below.",
+            "- Read only from the attached input documents below.",
             (
                 "- Return your structured role output as the final assistant message; "
                 "the adapter will persist it to this run's `response.md`."
@@ -684,7 +684,7 @@ class AgentAdapter:
                 f"- source: {prompt_asset_path}",
                 "",
                 _render_fenced_markdown(role_prompt),
-                "## Input Artifacts",
+                "## Input Documents",
                 "",
             ],
         )
@@ -703,7 +703,7 @@ class AgentAdapter:
                 [
                     "## Missing Inputs",
                     "",
-                    "The following inputs are missing in workspace and should be treated as unavailable:",
+                    "The following attached inputs are missing and should be treated as unavailable:",
                 ],
             )
             for artifact_path in missing_input_artifacts:
@@ -865,7 +865,11 @@ class AgentAdapter:
         return tuple(warnings)
 
     def _workspace_relative(self, path: Path) -> str:
-        return path.resolve().relative_to(self.task_workspace_path).as_posix()
+        resolved = path.resolve()
+        try:
+            return resolved.relative_to(self.task_workspace_path).as_posix()
+        except ValueError:
+            return str(resolved)
 
 
 def _utc_now_iso() -> str:

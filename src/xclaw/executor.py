@@ -452,6 +452,10 @@ class StageExecutor:
 
         if stage == Stage.ARCHITECT_PLANNING:
             include_all_current_artifacts = True
+        elif stage == Stage.PRODUCT_OWNER_DISPATCH:
+            input_artifacts, extra_context = self._product_owner_dispatch_input_artifacts(
+                context=context,
+            )
 
         if stage == Stage.DEVELOPER:
             input_artifacts, extra_context = self._developer_input_artifacts(context=context)
@@ -467,6 +471,27 @@ class StageExecutor:
             extra_context=extra_context,
             include_all_current_artifacts=include_all_current_artifacts,
         )
+
+    def _product_owner_dispatch_input_artifacts(
+        self,
+        *,
+        context: TaskContext,
+    ) -> tuple[tuple[str, ...] | None, dict[str, str]]:
+        if constants.ARTIFACT_PLAN in context.current_artifacts:
+            return None, {}
+
+        bootstrap_plan_source_path = context.bootstrap_plan_source_path
+        if bootstrap_plan_source_path is None:
+            return None, {}
+
+        extra_context = {
+            "bootstrap_plan_source": bootstrap_plan_source_path,
+            "bootstrap_plan_usage": (
+                "Use this external plan only as bootstrap context. Do not treat it as a current artifact "
+                "and do not include it in `- based_on_artifacts`."
+            ),
+        }
+        return (bootstrap_plan_source_path,), extra_context
 
     def _developer_input_artifacts(
         self,

@@ -39,6 +39,7 @@ class _TaskRecord:
     document: MarkdownDocument
     task_id: str
     task_workspace_path: str
+    bootstrap_plan_source_path: str | None
     target_repo_path: str
     target_repo_git_root: str | None
     target_repo_head: str | None
@@ -73,6 +74,7 @@ class TaskStore:
         return TaskContext(
             task_id=record.task_id,
             task_workspace_path=record.task_workspace_path,
+            bootstrap_plan_source_path=record.bootstrap_plan_source_path,
             target_repo_path=record.target_repo_path,
             target_repo_git_root=record.target_repo_git_root,
             target_repo_head=record.target_repo_head,
@@ -321,6 +323,9 @@ class TaskStore:
             basic_info_rows.get("task_workspace_path"),
             "task_workspace_path",
         )
+        bootstrap_plan_source_path = _normalize_optional_text(
+            basic_info_rows.get("bootstrap_plan_source_path")
+        )
         target_repo_path = _normalize_required_text(
             basic_info_rows.get("target_repo_path"),
             "target_repo_path",
@@ -343,6 +348,7 @@ class TaskStore:
             document=document,
             task_id=task_id_value,
             task_workspace_path=workspace_path,
+            bootstrap_plan_source_path=bootstrap_plan_source_path,
             target_repo_path=target_repo_path,
             target_repo_git_root=target_repo_git_root,
             target_repo_head=target_repo_head,
@@ -649,6 +655,7 @@ def _render_task_body(record: _TaskRecord) -> str:
         "| --- | --- |",
         f"| task_id | {record.task_id} |",
         f"| task_workspace_path | {record.task_workspace_path} |",
+        f"| bootstrap_plan_source_path | {_display_optional(record.bootstrap_plan_source_path)} |",
         f"| target_repo_path | {record.target_repo_path} |",
         f"| target_repo_git_root | {_display_optional(record.target_repo_git_root)} |",
         f"| target_repo_head | {_display_optional(record.target_repo_head)} |",

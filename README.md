@@ -46,6 +46,16 @@ xclaw start \
   --task "Implement xxx and add the necessary tests"
 ```
 
+Or bootstrap directly from an existing plan:
+
+```bash
+xclaw start \
+  --repo /path/to/target-repo \
+  --plan ./plan.md
+```
+
+`--plan` is treated as bootstrap context only. The formal `current/plan.md` is still produced by Product Owner after startup.
+
 ### Check status
 
 ```bash

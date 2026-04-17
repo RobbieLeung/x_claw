@@ -170,6 +170,7 @@ class AgentExecutionStatus(str, Enum):
 
 FIELD_TASK_ID: Final = "task_id"
 FIELD_TASK_WORKSPACE_PATH: Final = "task_workspace_path"
+FIELD_BOOTSTRAP_PLAN_SOURCE_PATH: Final = "bootstrap_plan_source_path"
 FIELD_TARGET_REPO_PATH: Final = "target_repo_path"
 FIELD_TARGET_REPO_GIT_ROOT: Final = "target_repo_git_root"
 FIELD_TARGET_REPO_HEAD: Final = "target_repo_head"
@@ -185,6 +186,7 @@ TARGET_REPO_CONTEXT_FIELDS: Final[tuple[str, ...]] = (
 TASK_CONTEXT_FIELDS: Final[tuple[str, ...]] = (
     FIELD_TASK_ID,
     FIELD_TASK_WORKSPACE_PATH,
+    FIELD_BOOTSTRAP_PLAN_SOURCE_PATH,
     *TARGET_REPO_CONTEXT_FIELDS,
 )
 
@@ -321,6 +323,7 @@ __all__ = [
     "FIELD_TARGET_REPO_GIT_ROOT",
     "FIELD_TARGET_REPO_HEAD",
     "FIELD_TARGET_REPO_PATH",
+    "FIELD_BOOTSTRAP_PLAN_SOURCE_PATH",
     "FIELD_TASK_ID",
     "FIELD_TASK_WORKSPACE_PATH",
     "HISTORY_DIRNAME",

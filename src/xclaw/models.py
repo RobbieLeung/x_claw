@@ -209,6 +209,7 @@ class TaskContext(SerializableModel):
     task_id: str
     task_workspace_path: str
     target_repo_path: str
+    bootstrap_plan_source_path: str | None = None
     target_repo_git_root: str | None = None
     target_repo_head: str | None = None
     target_repo_dirty: bool = False
@@ -227,6 +228,11 @@ class TaskContext(SerializableModel):
             self.task_workspace_path,
             constants.FIELD_TASK_WORKSPACE_PATH,
         )
+        if self.bootstrap_plan_source_path is not None:
+            self.bootstrap_plan_source_path = _require_non_empty_string(
+                self.bootstrap_plan_source_path,
+                constants.FIELD_BOOTSTRAP_PLAN_SOURCE_PATH,
+            )
         self.target_repo_path = _require_non_empty_string(
             self.target_repo_path,
             constants.FIELD_TARGET_REPO_PATH,

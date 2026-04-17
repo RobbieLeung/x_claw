@@ -195,11 +195,19 @@ def initialize_task_workspace(
     task_description: str,
     task_id: str | None = None,
     workspace_root: str | Path | None = None,
+    initial_stage: Stage | str = Stage.INTAKE,
+    bootstrap_plan_source_path: str | Path | None = None,
 ) -> WorkspaceBootstrapResult:
     """Create task workspace and seed initial task/event markdown files."""
 
     description = _normalize_non_empty(task_description, "task_description")
+    normalized_initial_stage = Stage(initial_stage)
     repository_context = collect_target_repo_context(target_repo_path)
+    normalized_bootstrap_plan_source_path = None
+    if bootstrap_plan_source_path is not None:
+        normalized_bootstrap_plan_source_path = str(
+            Path(bootstrap_plan_source_path).expanduser().resolve()
+        )
 
     root = resolve_workspace_root(workspace_root)
     root.mkdir(parents=True, exist_ok=True)
@@ -223,27 +231,32 @@ def initialize_task_workspace(
     task_file_path = task_workspace / constants.TASK_FILENAME
     event_log_file_path = task_workspace / constants.EVENT_LOG_FILENAME
 
-    recovery_note = "intake workspace initialized"
-    if not repository_context.is_git_repository:
-        recovery_note = (
-            "intake workspace initialized; target repository is not a git worktree"
+    recovery_note_parts = [f"{normalized_initial_stage.value} workspace initialized"]
+    if normalized_bootstrap_plan_source_path is not None:
+        recovery_note_parts.append(
+            f"bootstrap_plan_source_path={normalized_bootstrap_plan_source_path}"
         )
+    if not repository_context.is_git_repository:
+        recovery_note_parts.append("target repository is not a git worktree")
+    recovery_note_parts.append(f"task={description}")
+    recovery_note = "; ".join(recovery_note_parts)
     template_context: dict[str, str] = {
         "task_id": task_id_value,
-        "current_stage": Stage.INTAKE.value,
+        "current_stage": normalized_initial_stage.value,
         "status": constants.TASK_STATUS_RUNNING,
         "task_version": "1",
         "event_log_version": "1",
         "created_at": created_at,
         "supersedes": "null",
         "target_repo_path": repository_context.target_repo_path,
+        "bootstrap_plan_source_path": normalized_bootstrap_plan_source_path or "-",
         "task_workspace_path": str(task_workspace),
         "target_repo_git_root": repository_context.target_repo_git_root or "-",
         "target_repo_head": repository_context.target_repo_head or "-",
         "target_repo_dirty": _template_scalar(repository_context.target_repo_dirty),
-        "current_owner": owner_for_stage(Stage.INTAKE),
+        "current_owner": owner_for_stage(normalized_initial_stage),
         "gateway_pid": "-",
-        "recovery_note": f"{recovery_note}; task={description}",
+        "recovery_note": recovery_note,
     }
 
     task_rendered = render_template("task.md.j2", template_context)
@@ -255,13 +268,14 @@ def initialize_task_workspace(
     task_context = TaskContext(
         task_id=task_id_value,
         task_workspace_path=str(task_workspace),
+        bootstrap_plan_source_path=normalized_bootstrap_plan_source_path,
         target_repo_path=repository_context.target_repo_path,
         target_repo_git_root=repository_context.target_repo_git_root,
         target_repo_head=repository_context.target_repo_head,
         target_repo_dirty=repository_context.target_repo_dirty,
-        current_stage=Stage.INTAKE,
+        current_stage=normalized_initial_stage,
         status=TaskStatus.RUNNING,
-        current_owner=owner_for_stage(Stage.INTAKE),
+        current_owner=owner_for_stage(normalized_initial_stage),
         latest_event_seq=1,
         recovery_notes=(recovery_note,),
         gateway_pid=None,

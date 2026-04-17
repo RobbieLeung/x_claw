@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -52,6 +53,8 @@ _STATUS_FIELD_ORDER: tuple[str, ...] = (
     "latest_review_request_id",
 )
 
+_FIRST_H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -64,7 +67,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     start_parser = subparsers.add_parser("start", help="Start the single active task service")
     start_parser.add_argument("--repo", type=Path, required=True, help="Target repository path")
-    start_parser.add_argument("--task", required=True, help="Task description")
+    start_parser.add_argument(
+        "--task",
+        help="Task description; optional when --plan is provided",
+    )
+    start_parser.add_argument("--plan", type=Path, help="Bootstrap plan markdown file path")
     start_parser.add_argument("--task-id", help="Optional explicit task identifier")
     start_parser.add_argument("--workspace-root", type=Path, help="Optional workspace root override")
 
@@ -222,11 +229,21 @@ def _handle_start(args: argparse.Namespace) -> int:
             "Use `xclaw status`.",
         )
 
+    bootstrap_plan_path = _resolve_bootstrap_plan_path(args.plan)
+    task_description = _resolve_start_task_description(
+        explicit_task=args.task,
+        bootstrap_plan_path=bootstrap_plan_path,
+    )
+
     bootstrap = initialize_task_workspace(
         target_repo_path=args.repo,
-        task_description=args.task,
+        task_description=task_description,
         task_id=args.task_id,
         workspace_root=workspace_root,
+        initial_stage=(
+            Stage.PRODUCT_OWNER_DISPATCH if bootstrap_plan_path is not None else Stage.INTAKE
+        ),
+        bootstrap_plan_source_path=bootstrap_plan_path,
     )
     worker = _spawn_gateway_worker(
         task_workspace_path=bootstrap.task_workspace_path,
@@ -289,7 +306,7 @@ def _idle_status_view() -> dict[str, str]:
         "task_status": "idle",
         "user_summary": "No active task is running.",
         "latest_update": "No active task is running.",
-        "next_step": "Run `xclaw start --repo ... --task ...` to begin, or `xclaw resume` to recover the latest task.",
+        "next_step": "Run `xclaw start --repo ... --task ...` or `xclaw start --repo ... --plan ...` to begin, or `xclaw resume` to recover the latest task.",
         "needs_human_review": "no",
         "review_kind": "-",
         "plan_confirmation_summary": "-",
@@ -469,6 +486,54 @@ def _resolve_cli_workspace_root(workspace_root: Path | None) -> Path | None:
     if workspace_root is None:
         return None
     return resolve_workspace_root(workspace_root)
+
+
+def _resolve_bootstrap_plan_path(plan_path: Path | None) -> Path | None:
+    if plan_path is None:
+        return None
+
+    candidate = plan_path.expanduser().resolve()
+    if not candidate.exists():
+        raise CliCommandError(f"bootstrap plan does not exist: {candidate}")
+    if not candidate.is_file():
+        raise CliCommandError(f"bootstrap plan must be a file: {candidate}")
+    try:
+        content = candidate.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CliCommandError(f"failed to read bootstrap plan {candidate}: {exc}") from exc
+    if not content.strip():
+        raise CliCommandError(f"bootstrap plan must be non-empty: {candidate}")
+    return candidate
+
+
+def _resolve_start_task_description(
+    *,
+    explicit_task: str | None,
+    bootstrap_plan_path: Path | None,
+) -> str:
+    if explicit_task is not None and explicit_task.strip():
+        return explicit_task.strip()
+    if bootstrap_plan_path is None:
+        raise CliCommandError("`xclaw start` requires `--task` or `--plan`.")
+
+    try:
+        content = bootstrap_plan_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CliCommandError(f"failed to read bootstrap plan {bootstrap_plan_path}: {exc}") from exc
+    return _derive_task_description_from_plan(content=content, plan_path=bootstrap_plan_path)
+
+
+def _derive_task_description_from_plan(*, content: str, plan_path: Path) -> str:
+    heading = _FIRST_H1_RE.search(content)
+    if heading is not None:
+        return heading.group(1).strip()
+
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+
+    return plan_path.stem
 
 
 def _spawn_gateway_worker(
