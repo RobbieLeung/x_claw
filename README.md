@@ -8,14 +8,14 @@
 - Single active task
 - Local `codex` CLI only
 - Human supervision through `status --advise`, `--approve`, and `--reject`
-- Internal roles are `Product Owner`, `Architect`, `Developer`, `Tester`, `Human Gate`, and `Orchestrator`
+- Internal roles are `Product Owner`, `Architect`, `Developer`, `Tester`, `Recovery`, `Human Gate`, and `Orchestrator`
 - `Product Owner` is the only formal routing owner
 
 For the full design rationale, see [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Highlights
 
-- Minimal command surface: only `start`, `status`, and `stop`
+- Minimal command surface: only `start`, `status`, `stop`, and `resume`
 - Plan-first execution: the workflow revolves around a single formal `plan.md`
 - Approval on demand: plan confirmation is requested only when the current plan has human decision points
 - Mandatory final delivery review before `closeout`

@@ -64,6 +64,7 @@ ROLE_PRODUCT_OWNER: Final = "product_owner"
 ROLE_ARCHITECT: Final = "architect"
 ROLE_DEVELOPER: Final = "developer"
 ROLE_TESTER: Final = "tester"
+ROLE_RECOVERY: Final = "recovery"
 ROLE_HUMAN_GATE: Final = "human_gate"
 ROLE_ORCHESTRATOR: Final = "orchestrator"
 
@@ -72,6 +73,7 @@ ROLE_NAMES: Final[tuple[str, ...]] = (
     ROLE_ARCHITECT,
     ROLE_DEVELOPER,
     ROLE_TESTER,
+    ROLE_RECOVERY,
     ROLE_HUMAN_GATE,
     ROLE_ORCHESTRATOR,
 )
@@ -339,6 +341,7 @@ __all__ = [
     "REVIEW_KIND_PLAN",
     "ROLE_DEVELOPER",
     "ROLE_ARCHITECT",
+    "ROLE_RECOVERY",
     "ROLE_HUMAN_GATE",
     "ROLE_NAMES",
     "ROLE_ORCHESTRATOR",

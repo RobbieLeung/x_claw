@@ -180,8 +180,10 @@ class StageExecutor:
 
     def _execute_product_owner_stage(self, *, stage: Stage) -> StageOutcome:
         context = self.task_store.load_task_context()
-        events = self.task_store.list_events()
-        unresolved_feedback = has_pending_human_advice(artifact_store=self.artifact_store)
+        unresolved_feedback = _has_unresolved_human_feedback(
+            task_store=self.task_store,
+            artifact_store=self.artifact_store,
+        )
         role, invocation_result, response_text = self._invoke_role_stage(
             stage=stage,
             unresolved_feedback=unresolved_feedback,
@@ -1245,10 +1247,36 @@ def _stage_objective(
 
     if unresolved_feedback:
         objective += (
-            " The latest formal human advice is still unresolved, so you must absorb it in this "
-            "response and set `- human_advice_disposition` to accepted, partially_accepted, or rejected."
+            " The latest formal human feedback is still unresolved, either from pending advice or "
+            "a rejected review_decision, so you must absorb it in this response and set "
+            "`- human_advice_disposition` to accepted, partially_accepted, or rejected."
         )
     return objective
+
+
+def _has_unresolved_human_feedback(
+    *,
+    task_store: TaskStore,
+    artifact_store: ArtifactStore,
+) -> bool:
+    if has_pending_human_advice(artifact_store=artifact_store):
+        return True
+
+    review_decision = read_current_review_decision(artifact_store=artifact_store)
+    if review_decision is None or review_decision.decision != constants.REVIEW_DECISION_REJECTED:
+        return False
+
+    events = task_store.list_events()
+    latest_review_seq = 0
+    expected_note = f"review_decision_id={review_decision.review_decision_id}"
+    for event in events:
+        if event.action == "review_decision_submitted" and expected_note in event.notes:
+            latest_review_seq = event.seq
+    if latest_review_seq == 0:
+        return True
+
+    latest_disposition_seq = _latest_event_seq(events, "human_advice_disposition_recorded")
+    return latest_review_seq > latest_disposition_seq
 
 
 def _artifact_path_for_type(
@@ -1371,36 +1399,48 @@ def _extract_optional_bullet_field(response_text: str, field_name: str) -> str |
 
 
 def _extract_markdown_section(response_text: str, title: str) -> str | None:
+    sections = _extract_markdown_sections(response_text, (title,))
+    if not sections:
+        return None
+    return sections[0]
+
+
+def _extract_latest_markdown_section(response_text: str, titles: tuple[str, ...]) -> str | None:
+    sections = _extract_markdown_sections(response_text, titles)
+    if not sections:
+        return None
+    return sections[-1]
+
+
+def _extract_markdown_sections(response_text: str, titles: tuple[str, ...]) -> list[str]:
+    title_set = set(titles)
     lines = response_text.splitlines()
-    start_index: int | None = None
-    heading_level: int | None = None
+    sections: list[str] = []
 
     for index, line in enumerate(lines):
         stripped = line.strip()
         match = re.match(r"^(#{1,6})\s+(.+?)\s*$", stripped)
         if match is None:
             continue
-        if match.group(2).strip() != title:
+        if match.group(2).strip() not in title_set:
             continue
-        start_index = index + 1
+
         heading_level = len(match.group(1))
-        break
-
-    if start_index is None or heading_level is None:
-        return None
-
-    collected: list[str] = []
-    for line in lines[start_index:]:
-        stripped = line.strip()
-        match = re.match(r"^(#{1,6})\s+(.+?)\s*$", stripped)
-        if match is not None and len(match.group(1)) <= heading_level:
-            break
-        collected.append(line)
-    return "\n".join(collected).strip("\n")
+        collected: list[str] = []
+        for section_line in lines[index + 1 :]:
+            section_stripped = section_line.strip()
+            section_match = re.match(r"^(#{1,6})\s+(.+?)\s*$", section_stripped)
+            if section_match is not None and len(section_match.group(1)) <= heading_level:
+                break
+            collected.append(section_line)
+        sections.append("\n".join(collected).strip("\n"))
+    return sections
 
 
 def _extract_developer_context_artifacts_field(response_text: str) -> tuple[str | None, str | None]:
-    developer_handoff_text = _extract_markdown_section(response_text, "Developer Handoff") or response_text
+    developer_handoff_text = (
+        _extract_latest_markdown_section(response_text, ("Developer Handoff", "Dev Handoff")) or response_text
+    )
 
     raw_value = _extract_optional_bullet_field(developer_handoff_text, "context_artifacts")
     if raw_value is not None:
@@ -1537,7 +1577,7 @@ def _parse_review_kind_requested(
 
 
 def _parse_plan_snapshot(*, response_text: str, source_label: str) -> PlanSnapshot | None:
-    plan_text = _extract_markdown_section(response_text, "Plan") or response_text
+    plan_text = _extract_latest_markdown_section(response_text, ("Plan", "Plan Refresh")) or response_text
 
     plan_revision = _extract_optional_bullet_field(plan_text, "plan_revision")
     human_confirmation_required = _extract_optional_bullet_field(

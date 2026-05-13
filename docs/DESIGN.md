@@ -50,7 +50,7 @@
 - `xclaw stop`
 - `xclaw resume`
 
-其中 `status` 同时承担“查看”和“监督输入”两个职责；`resume` 负责在没有活跃 worker 时，把最近 task 拉回 Product Owner 边界继续推进。
+其中 `status` 同时承担“查看”和“监督输入”两个职责；`resume` 负责在没有活跃 worker 时，调用 Recovery Agent 检查并最小修复最近 task workspace，然后从 Recovery Agent 选择的 stage 继续推进。
 
 `xclaw start` 支持两种启动入口：
 

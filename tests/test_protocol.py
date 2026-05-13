@@ -14,6 +14,7 @@ class ProtocolTest(unittest.TestCase):
 
     def test_role_stage_and_artifact_sets_match_architect_plan_flow(self) -> None:
         self.assertIn(protocol.ROLE_ARCHITECT, protocol.ROLE_NAMES)
+        self.assertIn(protocol.ROLE_RECOVERY, protocol.ROLE_NAMES)
         self.assertNotIn("project_manager", protocol.ROLE_NAMES)
         self.assertNotIn("qa", protocol.ROLE_NAMES)
 

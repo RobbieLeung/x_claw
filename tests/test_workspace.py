@@ -64,6 +64,69 @@ class WorkspaceTest(unittest.TestCase):
             self.assertEqual(discovered.task_id, "task-20240102-000000-new")
             self.assertEqual(discovered.task_workspace_path, latest.task_workspace_path)
 
+    def test_find_latest_task_workspace_keeps_corrupt_latest_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            workspace_root = root / "workspace"
+            initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="older",
+                task_id="task-20240101-000000-old",
+                workspace_root=workspace_root,
+            )
+            latest = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="latest",
+                task_id="task-20240102-000000-new",
+                workspace_root=workspace_root,
+            )
+            event_log = Path(latest.event_log_file_path)
+            event_log.write_text(
+                event_log.read_text(encoding="utf-8").replace(
+                    "| 1 |",
+                    "| 1 | extra-column |",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            discovered = find_latest_task_workspace(workspace_root)
+
+            self.assertIsNotNone(discovered)
+            assert discovered is not None
+            self.assertEqual(discovered.task_id, "task-20240102-000000-new")
+            self.assertEqual(discovered.task_workspace_path, latest.task_workspace_path)
+
+    def test_event_log_round_trips_pipe_in_notes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True, exist_ok=False)
+            result = initialize_task_workspace(
+                target_repo_path=repo,
+                task_description="pipe notes",
+                task_id="task-pipe-notes",
+                workspace_root=root / "workspace",
+            )
+            store = TaskStore(result.task_workspace_path)
+
+            store.append_event(
+                actor="system",
+                action="pipe_note_recorded",
+                result="failed",
+                notes="expected `yes|no` and got a|b",
+            )
+
+            event_log = Path(result.event_log_file_path).read_text(encoding="utf-8")
+            self.assertIn(r"yes\|no", event_log)
+            self.assertIn(r"a\|b", event_log)
+            self.assertEqual(
+                store.list_events()[-1].notes,
+                "expected `yes|no` and got a|b",
+            )
+
     def test_initialize_task_workspace_supports_bootstrap_plan_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

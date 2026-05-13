@@ -33,6 +33,7 @@ _ROLE_PROMPT_FILENAMES: dict[str, str] = {
     constants.ROLE_ARCHITECT: "architect.md",
     constants.ROLE_DEVELOPER: "developer.md",
     constants.ROLE_TESTER: "tester.md",
+    constants.ROLE_RECOVERY: "recovery.md",
 }
 
 _ROLE_RESULT_TYPES: dict[str, AgentResultType] = {
@@ -40,6 +41,7 @@ _ROLE_RESULT_TYPES: dict[str, AgentResultType] = {
     constants.ROLE_ARCHITECT: AgentResultType.PLAN_RESULT,
     constants.ROLE_DEVELOPER: AgentResultType.IMPLEMENTATION_RESULT,
     constants.ROLE_TESTER: AgentResultType.TEST_RESULT,
+    constants.ROLE_RECOVERY: AgentResultType.ROUTE_DECISION_RESULT,
 }
 
 _ROLE_REQUIRED_ARTIFACTS: dict[str, tuple[str, ...]] = {
@@ -54,6 +56,7 @@ _ROLE_REQUIRED_ARTIFACTS: dict[str, tuple[str, ...]] = {
         constants.ARTIFACT_TEST_HANDOFF,
         constants.ARTIFACT_IMPLEMENTATION_RESULT,
     ),
+    constants.ROLE_RECOVERY: (),
 }
 
 _PROMPT_REQUIRED_KEYWORDS: tuple[str, ...] = (
@@ -317,7 +320,12 @@ class AgentAdapter:
     def invoke(self, invocation: AgentInvocation) -> AgentInvocationResult:
         """Invoke one role and persist prompt/response/run log under `runs/`."""
 
-        task_context = self.task_store.load_task_context()
+        try:
+            task_context = self.task_store.load_task_context()
+        except Exception:
+            if invocation.role != constants.ROLE_RECOVERY:
+                raise
+            task_context = self.task_store.load_task_context_from_task_md()
         role_prompt, prompt_asset_path = self.load_role_prompt(invocation.role)
         run_directory_path = self.artifact_store.allocate_run_directory(role=invocation.role)
         run_directory = self._workspace_relative(run_directory_path)
@@ -566,7 +574,7 @@ class AgentAdapter:
 
         include_all_current = (
             invocation.include_all_current_artifacts
-            or invocation.role == constants.ROLE_PRODUCT_OWNER
+            or invocation.role in {constants.ROLE_PRODUCT_OWNER, constants.ROLE_RECOVERY}
         )
         if include_all_current:
             current_artifacts = self.artifact_store.list_current_artifacts()
@@ -646,16 +654,7 @@ class AgentAdapter:
             "",
             "## Execution Contract",
             "",
-            "- Read only from the attached input documents below.",
-            (
-                "- Return your structured role output as the final assistant message; "
-                "the adapter will persist it to this run's `response.md`."
-            ),
-            "- Do not create or edit files under `runs/` directly.",
-            (
-                "- Do not modify `task.md`, `event_log.md`, `current/`, or `history/` directly."
-            ),
-            "- The Product Owner gateway is the only component allowed to publish current artifacts.",
+            *self._render_execution_contract(invocation),
             (
                 "- If task-specific reusable guidance exists, inspect relevant `SKILL.md` files "
                 "under the local skills directory above before proceeding."
@@ -711,6 +710,38 @@ class AgentAdapter:
             lines.append("")
 
         return "\n".join(lines).rstrip() + "\n"
+
+    def _render_execution_contract(self, invocation: AgentInvocation) -> list[str]:
+        if invocation.role == constants.ROLE_RECOVERY:
+            return [
+                "- Read the attached input documents and inspect local workspace files as needed.",
+                (
+                    "- You may edit `task.md`, `event_log.md`, and files under `current/` only when "
+                    "needed to make the workspace resumable."
+                ),
+                "- Do not create, edit, delete, or rewrite files under `runs/` or `history/`.",
+                (
+                    "- Prefer the smallest workspace repair that lets the current task continue; "
+                    "do not modify the target repository."
+                ),
+                (
+                    "- Return your structured recovery decision as the final assistant message; "
+                    "the adapter will persist it to this run's `response.md`."
+                ),
+            ]
+
+        return [
+            "- Read only from the attached input documents below.",
+            (
+                "- Return your structured role output as the final assistant message; "
+                "the adapter will persist it to this run's `response.md`."
+            ),
+            "- Do not create or edit files under `runs/` directly.",
+            (
+                "- Do not modify `task.md`, `event_log.md`, `current/`, or `history/` directly."
+            ),
+            "- The Product Owner gateway is the only component allowed to publish current artifacts.",
+        ]
 
     def _build_response_text(
         self,
