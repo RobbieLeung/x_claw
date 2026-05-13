@@ -11,6 +11,7 @@ from xclaw.executor import (
     RouteDecision,
     StageExecutor,
     _extract_developer_context_artifacts_field,
+    _has_unresolved_human_feedback,
     _parse_route_decision,
     _require_plan_snapshot,
 )
@@ -106,6 +107,27 @@ class ExecutorContractTest(unittest.TestCase):
                 "- active_subtask_id: subtask-001\n\n"
                 "# Dev Handoff\n"
                 "- plan_revision: plan-r3\n"
+                "- active_subtask_id: subtask-001\n"
+                "- context_artifacts: progress\n"
+            ),
+            source_label="test response",
+        )
+
+        self.assertEqual(snapshot.plan_revision, "plan-r3")
+        self.assertFalse(snapshot.human_confirmation_required)
+        self.assertEqual(snapshot.human_confirmation_items, ())
+        self.assertEqual(snapshot.active_subtask_id, "subtask-001")
+
+    def test_require_plan_snapshot_accepts_plan_refresh_alias(self) -> None:
+        snapshot = _require_plan_snapshot(
+            response_text=(
+                "# Plan Refresh\n"
+                "- plan_revision: plan-r3\n"
+                "- human_confirmation_required: no\n"
+                "- human_confirmation_items: -\n"
+                "- active_subtask_id: subtask-001\n\n"
+                "# Dev Handoff\n"
+                "- current_plan_revision: plan-r3\n"
                 "- active_subtask_id: subtask-001\n"
                 "- context_artifacts: progress\n"
             ),
@@ -349,6 +371,81 @@ class ExecutorContractTest(unittest.TestCase):
                 ),
             )
 
+    def test_rejected_review_decision_is_unresolved_until_product_owner_disposition(self) -> None:
+        result, store, artifacts = self._workspace(task_id="task-rejected-review-feedback")
+        executor = StageExecutor(result.task_workspace_path)
+        store.update_runtime_state(
+            stage=Stage.HUMAN_GATE,
+            current_owner=constants.ROLE_HUMAN_GATE,
+            status=TaskStatus.WAITING_APPROVAL,
+        )
+        publish_review_request(
+            task_store=store,
+            artifact_store=artifacts,
+            summary="delivery review",
+            proposal_body="delivery proposal",
+            review_kind=ReviewKind.DELIVERY,
+        )
+        from xclaw.human_io import submit_review_decision  # local import keeps test focused
+
+        submit_review_decision(
+            task_store=store,
+            artifact_store=artifacts,
+            decision="rejected",
+            comment="requires runtime fallback",
+        )
+
+        self.assertTrue(
+            _has_unresolved_human_feedback(task_store=store, artifact_store=artifacts),
+        )
+        decision = _parse_route_decision(
+            """
+- next_stage: developer
+- task_status: running
+- based_on_artifacts: review_decision
+- human_advice_disposition: accepted
+- review_kind_requested: -
+""".strip(),
+            stage=Stage.PRODUCT_OWNER_DISPATCH,
+            unresolved_feedback=True,
+            current_artifacts=store.load_task_context().current_artifacts,
+        )
+        executor._record_human_advice_disposition(
+            decision=decision,
+            published_paths=(),
+        )
+
+        self.assertFalse(
+            _has_unresolved_human_feedback(task_store=store, artifact_store=artifacts),
+        )
+
+    def test_approved_review_decision_is_not_unresolved_feedback(self) -> None:
+        _, store, artifacts = self._workspace(task_id="task-approved-review-feedback")
+        store.update_runtime_state(
+            stage=Stage.HUMAN_GATE,
+            current_owner=constants.ROLE_HUMAN_GATE,
+            status=TaskStatus.WAITING_APPROVAL,
+        )
+        publish_review_request(
+            task_store=store,
+            artifact_store=artifacts,
+            summary="delivery review",
+            proposal_body="delivery proposal",
+            review_kind=ReviewKind.DELIVERY,
+        )
+        from xclaw.human_io import submit_review_decision  # local import keeps test focused
+
+        submit_review_decision(
+            task_store=store,
+            artifact_store=artifacts,
+            decision="approved",
+            comment="ship it",
+        )
+
+        self.assertFalse(
+            _has_unresolved_human_feedback(task_store=store, artifact_store=artifacts),
+        )
+
     def test_extract_developer_context_artifacts_field_accepts_bare_and_legacy_bullets(self) -> None:
         self.assertEqual(
             _extract_developer_context_artifacts_field(
@@ -371,6 +468,22 @@ class ExecutorContractTest(unittest.TestCase):
             _extract_developer_context_artifacts_field(
                 "# Plan\n\n- plan_revision: plan-r3\n\n"
                 "# Developer Handoff\n\n- context_artifacts: progress, implementation_result\n"
+            ),
+            ("progress, implementation_result", None),
+        )
+
+    def test_extract_developer_context_artifacts_field_accepts_dev_handoff_alias(self) -> None:
+        self.assertEqual(
+            _extract_developer_context_artifacts_field(
+                "# Developer Handoff\n\n"
+                "## Stage Context\n\n"
+                "- stage: product_owner_dispatch\n\n"
+                "## Agent Response\n\n"
+                "# Plan Refresh\n\n"
+                "- active_subtask_id: subtask-001\n\n"
+                "# Dev Handoff\n\n"
+                "- active_subtask_id: subtask-001\n"
+                "- context_artifacts: progress, implementation_result\n"
             ),
             ("progress, implementation_result", None),
         )

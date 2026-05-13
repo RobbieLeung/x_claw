@@ -71,22 +71,19 @@ class TaskStore:
         record = self._read_task_record()
         events = self.list_events()
 
-        return TaskContext(
-            task_id=record.task_id,
-            task_workspace_path=record.task_workspace_path,
-            bootstrap_plan_source_path=record.bootstrap_plan_source_path,
-            target_repo_path=record.target_repo_path,
-            target_repo_git_root=record.target_repo_git_root,
-            target_repo_head=record.target_repo_head,
-            target_repo_dirty=record.target_repo_dirty,
-            current_stage=record.current_stage,
-            status=record.status,
-            current_owner=record.current_owner,
-            current_artifacts=record.current_artifacts,
+        return self._task_context_from_record(
+            record,
             latest_event_seq=events[-1].seq if events else 0,
             repair_loop_count=_count_repair_loops(events),
-            recovery_notes=record.recovery_notes,
-            gateway_pid=record.gateway_pid,
+        )
+
+    def load_task_context_from_task_md(self) -> TaskContext:
+        """Load task context from task.md only for recovery discovery paths."""
+
+        return self._task_context_from_record(
+            self._read_task_record(),
+            latest_event_seq=0,
+            repair_loop_count=0,
         )
 
     def update_runtime_state(
@@ -121,6 +118,31 @@ class TaskStore:
                 record.gateway_pid = gateway_pid
         self._write_task_record(record, bump_version=True)
         return self.load_task_context()
+
+    @staticmethod
+    def _task_context_from_record(
+        record: _TaskRecord,
+        *,
+        latest_event_seq: int,
+        repair_loop_count: int,
+    ) -> TaskContext:
+        return TaskContext(
+            task_id=record.task_id,
+            task_workspace_path=record.task_workspace_path,
+            bootstrap_plan_source_path=record.bootstrap_plan_source_path,
+            target_repo_path=record.target_repo_path,
+            target_repo_git_root=record.target_repo_git_root,
+            target_repo_head=record.target_repo_head,
+            target_repo_dirty=record.target_repo_dirty,
+            current_stage=record.current_stage,
+            status=record.status,
+            current_owner=record.current_owner,
+            current_artifacts=record.current_artifacts,
+            latest_event_seq=latest_event_seq,
+            repair_loop_count=repair_loop_count,
+            recovery_notes=record.recovery_notes,
+            gateway_pid=record.gateway_pid,
+        )
 
     def switch_stage_owner(
         self,
@@ -549,8 +571,43 @@ def _split_table_row(line: str) -> tuple[str, ...]:
     text = line.strip()
     if not (text.startswith("|") and text.endswith("|")):
         raise TaskStoreContractError(f"Invalid table row: {line!r}")
-    cells = [cell.strip() for cell in text[1:-1].split("|")]
+    cells = [_unescape_table_cell(cell.strip()) for cell in _split_table_cells(text[1:-1])]
     return tuple(cells)
+
+
+def _split_table_cells(row_body: str) -> list[str]:
+    cells: list[str] = []
+    current: list[str] = []
+    in_code_span = False
+    index = 0
+    while index < len(row_body):
+        char = row_body[index]
+        if char == "\\" and index + 1 < len(row_body) and row_body[index + 1] == "|":
+            current.append("\\|")
+            index += 2
+            continue
+        if char == "`":
+            in_code_span = not in_code_span
+            current.append(char)
+            index += 1
+            continue
+        if char == "|" and not in_code_span:
+            cells.append("".join(current))
+            current = []
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    cells.append("".join(current))
+    return cells
+
+
+def _escape_table_cell(value: str) -> str:
+    return value.replace("|", r"\|")
+
+
+def _unescape_table_cell(value: str) -> str:
+    return value.replace(r"\|", "|")
 
 
 def _parse_table_pairs(
@@ -707,13 +764,13 @@ def _render_event_log_body(events: Sequence[TaskEvent]) -> str:
             "| "
             + " | ".join(
                 (
-                    str(event.seq),
-                    event.timestamp,
-                    event.actor,
-                    event.action,
-                    _format_artifact_cell(event.input_artifacts),
-                    _format_artifact_cell(event.output_artifacts),
-                    _encode_event_result(event.result, event.notes),
+                    _escape_table_cell(str(event.seq)),
+                    _escape_table_cell(event.timestamp),
+                    _escape_table_cell(event.actor),
+                    _escape_table_cell(event.action),
+                    _escape_table_cell(_format_artifact_cell(event.input_artifacts)),
+                    _escape_table_cell(_format_artifact_cell(event.output_artifacts)),
+                    _escape_table_cell(_encode_event_result(event.result, event.notes)),
                 ),
             )
             + " |",

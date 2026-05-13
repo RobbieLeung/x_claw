@@ -64,6 +64,23 @@ class CliTest(unittest.TestCase):
         self.assertIn("needs_human_review:", stdout)
         self.assertNotIn("review_kind:", stdout)
 
+    def test_status_shows_latest_failed_task_without_worker(self) -> None:
+        workspace_root, store, _ = self._workspace(task_id="task-failed-no-worker")
+        store.update_runtime_state(
+            stage=Stage.PRODUCT_OWNER_DISPATCH,
+            current_owner=constants.ROLE_PRODUCT_OWNER,
+            status=TaskStatus.FAILED,
+            gateway_pid=None,
+        )
+
+        exit_code, stdout, stderr = _invoke_main(["status", "--workspace-root", str(workspace_root)])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("active_task_id: task-failed-no-worker", stdout)
+        self.assertIn("task_status: failed", stdout)
+        self.assertNotIn("task_status: idle", stdout)
+
     def test_status_shows_plan_review_kind_and_confirmation_summary(self) -> None:
         workspace_root, store, artifacts = self._workspace(task_id="task-plan-review-status")
         store.update_runtime_state(
@@ -111,6 +128,39 @@ class CliTest(unittest.TestCase):
         self.assertIn("review_decision: approved", stdout)
         self.assertIn("review_kind: delivery", stdout)
 
+    def test_status_reject_waiting_review_without_worker(self) -> None:
+        workspace_root, store, artifacts = self._workspace(task_id="task-review-no-worker")
+        store.update_runtime_state(
+            stage=Stage.HUMAN_GATE,
+            current_owner=constants.ROLE_HUMAN_GATE,
+            status=TaskStatus.WAITING_APPROVAL,
+            gateway_pid=None,
+        )
+        publish_review_request(
+            task_store=store,
+            artifact_store=artifacts,
+            summary="delivery review",
+            proposal_body="delivery proposal",
+            review_kind=ReviewKind.DELIVERY,
+        )
+
+        exit_code, stdout, stderr = _invoke_main(
+            [
+                "status",
+                "--workspace-root",
+                str(workspace_root),
+                "--reject",
+                "--comment",
+                "needs runtime change",
+            ]
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("review_decision: rejected", stdout)
+        self.assertIn("review_kind: delivery", stdout)
+        self.assertIn("task_status: running", stdout)
+
     def test_status_advise_is_blocked_while_waiting_approval(self) -> None:
         workspace_root, store, artifacts = self._workspace(task_id="task-advise-blocked")
         store.update_runtime_state(
@@ -133,7 +183,7 @@ class CliTest(unittest.TestCase):
         self.assertIn("task is waiting for human review", stderr)
 
 
-    def test_resume_restarts_latest_task_at_product_owner_boundary(self) -> None:
+    def test_resume_uses_recovery_agent_selected_stage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             repo = root / "repo"
@@ -167,19 +217,31 @@ class CliTest(unittest.TestCase):
             )
 
             fake_worker = type("Worker", (), {"pid": 654})()
-            with mock.patch("xclaw.cli._spawn_gateway_worker", return_value=fake_worker) as spawn_worker:
+            recovery = cli.ResumeRecoveryDecision(
+                resume_stage=Stage.DEVELOPER,
+                resume_strategy="repair_then_continue",
+                repaired_artifacts="current/dev_handoff.md",
+                reason="handoff repaired",
+                run_directory="runs/0003_recovery",
+            )
+            with (
+                mock.patch("xclaw.cli._invoke_resume_recovery_agent", return_value=recovery) as recover,
+                mock.patch("xclaw.cli._spawn_gateway_worker", return_value=fake_worker) as spawn_worker,
+            ):
                 exit_code, stdout, stderr = _invoke_main(["resume", "--workspace-root", str(workspace_root)])
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(stderr, "")
             self.assertIn("task_id: task-20240102-000000-latest", stdout)
-            self.assertIn("resume_stage: product_owner_dispatch", stdout)
+            self.assertIn("resume_stage: developer", stdout)
+            self.assertIn("resume_strategy: repair_then_continue", stdout)
+            recover.assert_called_once()
             spawn_worker.assert_called_once()
             resumed_store = TaskStore(latest.task_workspace_path)
             resumed_context = resumed_store.load_task_context()
             self.assertEqual(resumed_context.status, TaskStatus.RUNNING)
-            self.assertEqual(resumed_context.current_stage, Stage.PRODUCT_OWNER_DISPATCH)
-            self.assertEqual(resumed_context.current_owner, constants.ROLE_PRODUCT_OWNER)
+            self.assertEqual(resumed_context.current_stage, Stage.DEVELOPER)
+            self.assertEqual(resumed_context.current_owner, constants.ROLE_DEVELOPER)
 
     def test_resume_rejects_when_active_task_exists(self) -> None:
         workspace_root, _, _ = self._workspace(task_id="task-resume-blocked")

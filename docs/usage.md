@@ -167,12 +167,14 @@ xclaw resume
 
 - 仅在当前没有活跃 task 时可用
 - 选择 `workspace/` 下最新的一个 task workspace（默认生成的 `task_id` 自带时间序）
-- 把任务恢复到最近的 `Product Owner` 边界（通常是 `product_owner_dispatch`）
-- 重新拉起 `gateway-worker`，让 `Product Owner` 先修复当前 workspace 再继续跑 pipeline
+- 先调用 `Recovery Agent` 检查并最小修复 workspace
+- 由 `Recovery Agent` 决定从当前 stage 继续，还是回到合适的流程边界
+- 重新拉起 `gateway-worker`，让 pipeline 从恢复后的 stage 继续
 
 典型场景：
 
 - 上一轮卡在 `failed` 或被手工 `terminated`
+- worker 掉线后留下 `running` 状态但没有 `gateway_pid`
 - 需要保留 `current/` 和 `runs/` 现场继续推进
 
 ## 8. 停止任务

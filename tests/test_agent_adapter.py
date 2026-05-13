@@ -59,6 +59,7 @@ class AgentAdapterTest(unittest.TestCase):
                 constants.ROLE_ARCHITECT,
                 constants.ROLE_DEVELOPER,
                 constants.ROLE_TESTER,
+                constants.ROLE_RECOVERY,
             },
         )
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
@@ -11,6 +12,7 @@ import time
 from typing import Sequence
 
 from . import __version__, protocol as constants
+from .agent_adapter import AgentAdapter, AgentInvocation
 from .artifact_store import ArtifactStore
 from .gateway import GatewayRunConfig, TaskGateway
 from .human_io import (
@@ -23,8 +25,8 @@ from .human_io import (
     submit_human_advice,
     submit_review_decision,
 )
-from .protocol import ReviewDecision, Stage, TaskStatus, fixed_next_stage, owner_for_stage
-from .task_store import TaskStore
+from .protocol import AgentExecutionStatus, ReviewDecision, Stage, TaskStatus, owner_for_stage
+from .task_store import TaskStore, TaskStoreError
 from .workspace import (
     ActiveTaskDiscoveryError,
     WorkspaceError,
@@ -54,6 +56,16 @@ _STATUS_FIELD_ORDER: tuple[str, ...] = (
 )
 
 _FIRST_H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
+_BULLET_FIELD_RE_TEMPLATE = r"^-\s*{field_name}:\s*(.+?)\s*$"
+
+
+@dataclass(frozen=True)
+class ResumeRecoveryDecision:
+    resume_stage: Stage
+    resume_strategy: str
+    repaired_artifacts: str
+    reason: str
+    run_directory: str
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -156,34 +168,49 @@ def _handle_resume(args: argparse.Namespace) -> int:
     task_store = TaskStore(latest.task_workspace_path)
     artifact_store = ArtifactStore(latest.task_workspace_path)
     ensure_supervision_artifacts(task_store=task_store, artifact_store=artifact_store)
-    context = task_store.load_task_context()
+    try:
+        context = task_store.load_task_context()
+    except TaskStoreError:
+        context = task_store.load_task_context_from_task_md()
     if context.status == TaskStatus.COMPLETED:
         raise CliCommandError(
             f"latest task is already completed: {context.task_id} ({context.task_workspace_path}).",
         )
 
-    resume_stage = _resume_product_owner_stage(context.current_stage)
+    recovery_decision = _invoke_resume_recovery_agent(
+        task_workspace_path=context.task_workspace_path,
+        command_launch_dir=command_launch_dir,
+    )
+    resume_stage = recovery_decision.resume_stage
+    resumed_status = (
+        TaskStatus.WAITING_APPROVAL if resume_stage == Stage.HUMAN_GATE else TaskStatus.RUNNING
+    )
     task_store.update_runtime_state(
         stage=resume_stage,
         current_owner=owner_for_stage(resume_stage),
-        status=TaskStatus.RUNNING,
+        status=resumed_status,
         gateway_pid=None,
     )
     task_store.append_event(
         actor="system",
         action="task_resume_requested",
-        result=TaskStatus.RUNNING.value,
+        result=resumed_status.value,
         notes=(
             f"from_status={context.status.value}; "
             f"from_stage={context.current_stage.value}; "
-            f"resume_stage={resume_stage.value}"
+            f"resume_stage={resume_stage.value}; "
+            f"resume_strategy={recovery_decision.resume_strategy}; "
+            f"recovery_run={recovery_decision.run_directory}; "
+            f"reason={recovery_decision.reason}"
         ),
     )
     task_store.append_recovery_note(
         "task resumed from CLI; "
         f"from_status={context.status.value}; "
         f"from_stage={context.current_stage.value}; "
-        f"resume_stage={resume_stage.value}"
+        f"resume_stage={resume_stage.value}; "
+        f"resume_strategy={recovery_decision.resume_strategy}; "
+        f"reason={recovery_decision.reason}"
     )
     publish_progress_update(
         task_store=task_store,
@@ -194,14 +221,17 @@ def _handle_resume(args: argparse.Namespace) -> int:
             f"- task_id: {context.task_id}\n"
             f"- previous_status: {context.status.value}\n"
             f"- previous_stage: {context.current_stage.value}\n"
-            f"- resume_stage: {resume_stage.value}"
+            f"- resume_stage: {resume_stage.value}\n"
+            f"- resume_strategy: {recovery_decision.resume_strategy}\n"
+            f"- repaired_artifacts: {recovery_decision.repaired_artifacts}\n"
+            f"- reason: {recovery_decision.reason}"
         ),
-        current_focus="Product Owner is repairing the latest task workspace before the pipeline continues.",
+        current_focus=f"Workspace resumed at {resume_stage.value}.",
         next_step=f"Route the task from {resume_stage.value} and continue the pipeline.",
-        needs_human_review=False,
+        needs_human_review=resumed_status == TaskStatus.WAITING_APPROVAL,
         user_summary=(
-            "The latest task workspace has been resumed at a Product Owner boundary so the "
-            "pipeline can recover and continue."
+            "The latest task workspace has been inspected by the recovery agent and resumed "
+            "at the stage it selected."
         ),
     )
 
@@ -213,9 +243,108 @@ def _handle_resume(args: argparse.Namespace) -> int:
     print(f"task_id: {context.task_id}")
     print(f"task_workspace_path: {context.task_workspace_path}")
     print(f"resume_stage: {resume_stage.value}")
+    print(f"resume_strategy: {recovery_decision.resume_strategy}")
+    print(f"recovery_run: {recovery_decision.run_directory}")
     print(f"worker_pid: {worker.pid}")
     print(f"progress_path: {Path(context.task_workspace_path) / 'current' / 'progress.md'}")
     return 0
+
+
+def _invoke_resume_recovery_agent(
+    *,
+    task_workspace_path: str,
+    command_launch_dir: Path,
+) -> ResumeRecoveryDecision:
+    agents_dir = command_launch_dir / "agents"
+    skills_dir = command_launch_dir / "skills"
+    adapter = AgentAdapter(
+        task_workspace_path,
+        agents_dir=(agents_dir if agents_dir.is_dir() else None),
+        skills_dir=(skills_dir if skills_dir.is_dir() else None),
+    )
+    try:
+        result = adapter.invoke(
+            AgentInvocation(
+                role=constants.ROLE_RECOVERY,
+                stage=Stage.PRODUCT_OWNER_DISPATCH,
+                objective=(
+                    "Inspect and repair this workspace with the smallest necessary edits, then "
+                    "choose the stage from which the task should continue. Prefer continuing the "
+                    "current stage when its inputs can be made valid."
+                ),
+                input_artifacts=(constants.EVENT_LOG_FILENAME, "gateway.log"),
+                include_all_current_artifacts=True,
+                strict_required_artifacts=False,
+            ),
+        )
+    finally:
+        adapter.close()
+
+    if result.agent_result.execution_status != AgentExecutionStatus.SUCCEEDED:
+        raise CliCommandError(
+            "recovery agent failed; inspect "
+            f"{Path(task_workspace_path) / result.run_log_path}.",
+        )
+
+    response_path = Path(task_workspace_path) / result.response_path
+    response_text = response_path.read_text(encoding="utf-8")
+    return _parse_resume_recovery_response(
+        response_text=response_text,
+        run_directory=result.run_directory,
+    )
+
+
+def _parse_resume_recovery_response(
+    *,
+    response_text: str,
+    run_directory: str,
+) -> ResumeRecoveryDecision:
+    resume_stage_raw = _extract_required_response_field(response_text, "resume_stage")
+    resume_strategy = _extract_required_response_field(response_text, "resume_strategy")
+    repaired_artifacts = _extract_required_response_field(response_text, "repaired_artifacts")
+    reason = _extract_required_response_field(response_text, "reason")
+
+    try:
+        resume_stage = Stage(resume_stage_raw)
+    except ValueError as exc:
+        allowed = ", ".join(stage.value for stage in Stage)
+        raise CliCommandError(
+            f"recovery agent returned invalid resume_stage {resume_stage_raw!r}; allowed: {allowed}.",
+        ) from exc
+    if resume_stage == Stage.INTAKE:
+        raise CliCommandError("recovery agent must not resume a workspace at intake.")
+
+    allowed_strategies = {
+        "continue_current_stage",
+        "repair_then_continue",
+        "product_owner_repair",
+    }
+    if resume_strategy not in allowed_strategies:
+        allowed = ", ".join(sorted(allowed_strategies))
+        raise CliCommandError(
+            f"recovery agent returned invalid resume_strategy {resume_strategy!r}; allowed: {allowed}.",
+        )
+
+    return ResumeRecoveryDecision(
+        resume_stage=resume_stage,
+        resume_strategy=resume_strategy,
+        repaired_artifacts=repaired_artifacts,
+        reason=reason,
+        run_directory=run_directory,
+    )
+
+
+def _extract_required_response_field(response_text: str, field_name: str) -> str:
+    pattern = re.compile(
+        _BULLET_FIELD_RE_TEMPLATE.format(field_name=re.escape(field_name)),
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    matches = [match.strip() for match in pattern.findall(response_text) if match.strip()]
+    if len(matches) != 1:
+        raise CliCommandError(
+            f"recovery agent response must include exactly one `- {field_name}: ...` field.",
+        )
+    return matches[0]
 
 
 def _handle_start(args: argparse.Namespace) -> int:
@@ -281,19 +410,36 @@ def _watch_status(args: argparse.Namespace) -> int:
 
 def _run_status_once(args: argparse.Namespace) -> int:
     workspace_root = _resolve_cli_workspace_root(args.workspace_root)
-    active = find_active_task_workspace(workspace_root)
-    if active is None:
+    status_target = _find_status_task_workspace(workspace_root)
+    if status_target is None:
         if args.advise or args.approve or args.reject or args.comment:
             raise CliCommandError("no active task is running.")
         _print_status_view(_idle_status_view())
         return 0
 
-    task_store = TaskStore(active.task_workspace_path)
-    artifact_store = ArtifactStore(active.task_workspace_path)
+    task_store = TaskStore(status_target.task_workspace_path)
+    artifact_store = ArtifactStore(status_target.task_workspace_path)
     ensure_supervision_artifacts(task_store=task_store, artifact_store=artifact_store)
     _print_action_result(_run_status_action(args, task_store=task_store, artifact_store=artifact_store))
-    _print_status_view(_build_status_view(active=active, task_store=task_store, artifact_store=artifact_store))
+    _print_status_view(_build_status_view(active=status_target, task_store=task_store, artifact_store=artifact_store))
     return 0
+
+
+def _find_status_task_workspace(workspace_root: Path | None):
+    active = find_active_task_workspace(workspace_root)
+    if active is not None:
+        return active
+
+    latest = find_latest_task_workspace(workspace_root)
+    if latest is None:
+        return None
+    if latest.status in {
+        TaskStatus.RUNNING.value,
+        TaskStatus.WAITING_APPROVAL.value,
+        TaskStatus.FAILED.value,
+    }:
+        return latest
+    return None
 
 
 def _print_watch_header() -> None:

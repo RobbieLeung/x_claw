@@ -297,7 +297,7 @@ def find_active_task_workspace(
 ) -> ActiveTaskWorkspace | None:
     """Return the single live active task discovered from task.md files."""
 
-    from .task_store import TaskStore, TaskStoreError
+    from .task_store import TaskStore
 
     root = resolve_workspace_root(workspace_root)
     if not root.exists():
@@ -311,9 +311,8 @@ def find_active_task_workspace(
         task_file = child / constants.TASK_FILENAME
         if not task_file.is_file():
             continue
-        try:
-            context = TaskStore(child).load_task_context()
-        except TaskStoreError:
+        context = _load_task_context_for_discovery(child)
+        if context is None:
             continue
         if context.status.value in _TERMINAL_STATUSES:
             continue
@@ -356,7 +355,7 @@ def find_latest_task_workspace(
 ) -> TaskWorkspaceSummary | None:
     """Return the most recently updated task workspace under the selected root."""
 
-    from .task_store import TaskStore, TaskStoreError
+    from .task_store import TaskStore
 
     root = resolve_workspace_root(workspace_root)
     if not root.exists():
@@ -370,9 +369,8 @@ def find_latest_task_workspace(
         task_file = child / constants.TASK_FILENAME
         if not task_file.is_file():
             continue
-        try:
-            context = TaskStore(child).load_task_context()
-        except TaskStoreError:
+        context = _load_task_context_for_discovery(child)
+        if context is None:
             continue
 
         gateway_pid = context.gateway_pid
@@ -399,6 +397,19 @@ def find_latest_task_workspace(
     if latest_candidate is None:
         return None
     return latest_candidate[1]
+
+
+def _load_task_context_for_discovery(task_workspace_path: Path) -> TaskContext | None:
+    from .task_store import TaskStore, TaskStoreError
+
+    try:
+        store = TaskStore(task_workspace_path)
+        try:
+            return store.load_task_context()
+        except TaskStoreError:
+            return store.load_task_context_from_task_md()
+    except TaskStoreError:
+        return None
 
 
 def render_template(
